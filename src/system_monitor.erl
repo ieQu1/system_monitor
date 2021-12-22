@@ -171,9 +171,7 @@ monitors() ->
       false ->
         []
     end,
-  [{?MODULE, check_process_count, true, 2},
-   {?MODULE, suspect_procs, true, 5}]
-  ++ MaybeReportFullStatusMonitor
+  MaybeReportFullStatusMonitor
   ++ AdditionalMonitors.
 
 %%------------------------------------------------------------------------------
