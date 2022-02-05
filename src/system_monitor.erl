@@ -24,12 +24,14 @@
 %% Include files
 %%--------------------------------------------------------------------
 
--include_lib("system_monitor/include/system_monitor.hrl").
+-include("sysmon_int.hrl").
 
 -include_lib("kernel/include/logger.hrl").
 
 %% API
 -export([ start_link/0
+        , reset/0
+
         , get_app_top/0
         , get_abs_app_top/0
         , get_app_memory/0
@@ -39,7 +41,10 @@
         , get_proc_info/1
         ]).
 
--export([reset/0]).
+%% Builtin checks
+-export([ check_process_count/0
+        , suspect_procs/0
+        ]).
 
 %% gen_server callbacks
 -export([ init/1
@@ -53,18 +58,19 @@
 %% Internal exports
 -export([report_data/2]).
 
+-export_type([ function_top/0
+             ]).
+
 -include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
 -define(TICK_INTERVAL, 1000).
+-define(TABLE, system_monitor_data_tab).
+
+-type function_top() :: [{mfa(), number()}].
 
 -record(state, { monitors = []
                , timer_ref
-               , last_ts               :: integer()
-               , proc_top         = [] :: [#erl_top{}]
-               , app_top          = [] :: [#app_top{}]
-               , init_call_top    = [] :: function_top()
-               , current_fun_top  = [] :: function_top()
                }).
 
 %%====================================================================
@@ -82,8 +88,8 @@ reset() ->
 %% @doc Get Erlang process top
 -spec get_proc_top() -> {integer(), [#erl_top{}]}.
 get_proc_top() ->
-  {ok, Data} = gen_server:call(?SERVER, get_proc_top, infinity),
-  Data.
+  [{_, TS, Top}] = ets:lookup(?TABLE, proc_top),
+  {TS, Top}.
 
 %% @doc Get Erlang process top info for one process
 -spec get_proc_info(pid() | atom()) -> #erl_top{} | false.
@@ -93,7 +99,8 @@ get_proc_info(Name) when is_atom(Name) ->
     Pid       -> get_proc_info(Pid)
   end;
 get_proc_info(Pid) ->
-  gen_server:call(?SERVER, {get_proc_top, Pid}, infinity).
+  Top = lookup_top(proc_top),
+  lists:keyfind(pid_to_list(Pid), #erl_top.pid, Top).
 
 %% @doc Get relative reduction utilization per application, sorted by
 %% reductions
@@ -123,18 +130,24 @@ get_app_processes() ->
                              , current_function := function_top()
                              }.
 get_function_top() ->
-  {ok, Data} = gen_server:call(?SERVER, get_function_top, infinity),
-  Data.
+  #{ initial_call     => lookup_top(init_call_top)
+   , current_function => lookup_top(current_fun_top)
+   }.
 
 %%====================================================================
 %% gen_server callbacks
 %%====================================================================
 
 init([]) ->
+  ets:new(?TABLE, [ public
+                  , named_table
+                  , set
+                  , {keypos, 1}
+                  , {write_concurrency, false}
+                  ]),
   {ok, Timer} = timer:send_interval(?TICK_INTERVAL, {self(), tick}),
   State = #state{ monitors  = init_monitors()
                 , timer_ref = Timer
-                , last_ts   = system_monitor_collector:timestamp()
                 },
   {ok, State, {continue, start_callback}}.
 
@@ -145,32 +158,17 @@ handle_continue(start_callback, State) ->
   end,
   {noreply, State}.
 
-handle_call(get_proc_top, _From, State) ->
-  Top = State#state.proc_top,
-  SnapshotTS = State#state.last_ts,
-  Data = {SnapshotTS, Top},
-  {reply, {ok, Data}, State};
-handle_call({get_proc_top, Pid}, _From, State) ->
-  Top = State#state.proc_top,
-  {reply, lists:keyfind(pid_to_list(Pid), #erl_top.pid, Top), State};
-handle_call(get_app_top, _From, State) ->
-  Data = State#state.app_top,
-  {reply, {ok, Data}, State};
-handle_call(get_function_top, _From, State) ->
-  Data = #{ initial_call     => State#state.init_call_top
-          , current_function => State#state.current_fun_top
-          },
-  {reply, {ok, Data}, State};
-handle_call({report_data, SnapshotTS, ProcTop, AppTop, InitCallTop, CurrentFunTop}, _From, State) ->
-  {reply, ok, State#state{ last_ts         = SnapshotTS
-                         , proc_top        = ProcTop
-                         , app_top         = AppTop
-                         , init_call_top   = InitCallTop
-                         , current_fun_top = CurrentFunTop
-                         }};
 handle_call(_Request, _From, State) ->
   {reply, {error, unknown_call}, State}.
 
+handle_cast({report_data, SnapshotTS, ProcTop, AppTop, InitCallTop, CurrentFunTop}, State) ->
+  ets:insert(?TABLE, {proc_top,        SnapshotTS, ProcTop}),
+  ets:insert(?TABLE, {app_top,         SnapshotTS, AppTop}),
+  ets:insert(?TABLE, {init_call_top,   SnapshotTS, InitCallTop}),
+  ets:insert(?TABLE, {current_fun_top, SnapshotTS, CurrentFunTop}),
+  report_node_status(SnapshotTS, ProcTop),
+  ?tp(sysmon_report_data, #{ts => SnapshotTS}),
+  {noreply, State};
 handle_cast(reset, State) ->
   {noreply, State#state{monitors = init_monitors()}};
 handle_cast(_Msg, State) ->
@@ -202,12 +200,40 @@ terminate(_Reason, State) ->
   [apply(?MODULE, Monitor, []) ||
     {Monitor, true, _TicksReset, _Ticks} <- State#state.monitors].
 
+%%================================================================================
+%% Builtin checks
+%%================================================================================
+
+%% @doc Check the number of processes and log an aggregate summary of
+%% the process info if the count is above Threshold.
+-spec check_process_count() -> ok.
+check_process_count() ->
+  {ok, MaxProcs} = application:get_env(?APP, top_max_procs),
+  case erlang:system_info(process_count) of
+    Count when Count > MaxProcs div 5 ->
+      ?LOG_WARNING( "Abnormal process count (~p).~n"
+                  , [Count]
+                  , #{domain => [system_monitor]}
+                  );
+    _ -> ok
+  end.
+
+suspect_procs() ->
+  {_TS, ProcTop} = get_proc_top(),
+  Env = fun(Name) -> application:get_env(?APP, Name, undefined) end,
+  Conf =
+    {Env(suspect_procs_max_memory),
+     Env(suspect_procs_max_message_queue_len),
+     Env(suspect_procs_max_total_heap_size)},
+  SuspectProcs = lists:filter(fun(Proc) -> is_suspect_proc(Proc, Conf) end, ProcTop),
+  lists:foreach(fun log_suspect_proc/1, SuspectProcs).
+
 %%====================================================================
 %% Internal exports
 %%====================================================================
 
 report_data(SnapshotTS, {ProcTop, AppTop, InitCallTop, CurrentFunTop}) ->
-  gen_server:call(?SERVER, {report_data, SnapshotTS, ProcTop, AppTop, InitCallTop, CurrentFunTop}).
+  gen_server:cast(?SERVER, {report_data, SnapshotTS, ProcTop, AppTop, InitCallTop, CurrentFunTop}).
 
 %%==============================================================================
 %% Internal functions
@@ -230,25 +256,84 @@ init_monitors() ->
 %% once every hour, as there is a tick every second.
 -spec monitors() -> [{module(), function(), boolean(), pos_integer()}].
 monitors() ->
-  {ok, AdditionalMonitors} = application:get_env(system_monitor, status_checks),
-  MaybeReportFullStatusMonitor =
-    case system_monitor_callback:is_configured() of
-      true ->
-        {ok, TopInterval} = application:get_env(?APP, top_sample_interval),
-        [{?MODULE, report_full_status, false, TopInterval div 1000}];
-      false ->
-        []
-    end,
-  MaybeReportFullStatusMonitor
-  ++ AdditionalMonitors.
+  ?CFG(status_checks).
 
-%%------------------------------------------------------------------------------
-%% Monitor for number of processes
-%%------------------------------------------------------------------------------
+%% @doc Report node status
+report_node_status(TS, ProcTop) ->
+  system_monitor_callback:produce(proc_top, ProcTop),
+  report_app_top(TS),
+  %% Node status report goes last, and it "seals" the report for this
+  %% time interval:
+  NodeReport =
+    case application:get_env(?APP, node_status_fun) of
+      {ok, {Module, Function}} ->
+        try
+          Module:Function()
+        catch
+          _:_ ->
+            <<>>
+        end;
+      _ ->
+        <<>>
+    end,
+  system_monitor_callback:produce(node_role,
+                                  [{node_role, node(), TS, iolist_to_binary(NodeReport)}]).
 
 -spec do_get_app_top(integer()) -> [{atom(), number()}].
 do_get_app_top(FieldId) ->
-  {ok, Data} = gen_server:call(?SERVER, get_app_top, infinity),
+  Data = lookup_top(app_top),
   lists:reverse(
     lists:keysort(2, [{Val#app_top.app, element(FieldId, Val)}
                       || Val <- Data])).
+
+-spec lookup_top(proc_top | app_top | init_call_top | current_fun_top) -> list().
+lookup_top(Key) ->
+  case ets:lookup(?TABLE, Key) of
+    [{Key, _Timestamp, Vals}] -> Vals;
+    []                        -> []
+  end.
+
+is_suspect_proc(Proc, {MaxMemory, MaxMqLen, MaxTotalHeapSize}) ->
+  #erl_top{memory = Memory,
+           message_queue_len = MessageQueueLen,
+           total_heap_size = TotalHeapSize} =
+    Proc,
+  GreaterIfDef =
+    fun ({undefined, _}) ->
+          false;
+        ({Comp, Value}) ->
+          Value >= Comp
+    end,
+  ToCompare =
+    [{MaxMemory, Memory}, {MaxMqLen, MessageQueueLen}, {MaxTotalHeapSize, TotalHeapSize}],
+  lists:any(GreaterIfDef, ToCompare).
+
+log_suspect_proc(Proc) ->
+  ErlTopStr = system_monitor_lib:erl_top_to_str(Proc),
+  Format = "Suspect Proc~n~s",
+  ?LOG_WARNING(Format, [ErlTopStr], #{domain => [system_monitor]}).
+
+-spec report_app_top(integer()) -> ok.
+report_app_top(TS) ->
+  AppReds  = get_abs_app_top(),
+  present_results(app_top, reductions, AppReds, TS),
+  AppMem   = get_app_memory(),
+  present_results(app_top, memory, AppMem, TS),
+  AppProcs = get_app_processes(),
+  present_results(app_top, processes, AppProcs, TS),
+  #{ current_function := CurrentFunction
+   , initial_call := InitialCall
+   } = get_function_top(),
+  present_results(fun_top, current_function, CurrentFunction, TS),
+  present_results(fun_top, initial_call, InitialCall, TS),
+  ok.
+
+present_results(Record, Tag, Values, TS) ->
+  Node = node(),
+  L = lists:filtermap(fun ({Key, Val}) ->
+                            {true, {Record, Node, TS, Key, Tag, Val}};
+                          (_) ->
+                            false
+                      end,
+                      Values),
+  system_monitor_callback:produce(Record, L).

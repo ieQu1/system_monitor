@@ -1,28 +1,29 @@
-name: Build
-on:
-  push:
-    branches:
-      - '*'
-  pull_request:
-    branches:
-      - master
+name: CI
+on: [push. pull_request]
 jobs:
-  build:
-    strategy:
-      matrix:
-        platform: [ubuntu-18.04]
-        otp-version: [21.3.8.17-1, 22.3.4.7-1]
-    runs-on: ${{ matrix.platform }}
+  test:
+    runs-on: ubuntu-21.10
     steps:
-    - name: Prepare the environment
-      run: |
-        deb=esl-erlang_${{ matrix.otp-version }}~ubuntu~bionic_amd64.deb
-        wget https://packages.erlang-solutions.com/erlang/debian/pool/${deb}
-        sudo apt-get install --allow-downgrades --no-install-recommends ./${deb}
-        wget https://github.com/erlang/rebar3/releases/download/3.14.0/rebar3
-        chmod +x rebar3
-        sudo mv rebar3 /usr/local/bin/rebar3
-    - name: Checkout
-      uses: actions/checkout@v2
-    - name: Compile
-      run: make test
+      - uses: actions/checkout@v2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get install pwgen
+      - name: Install Erlang/OTP
+        run: |
+          OTP_VERSION="24.1.7-1"
+          UBUNTU_RELEASE="impish"
+          DEB_NAME="esl-erlang_${OTP_VERSION}~ubuntu~${UBUNTU_RELEASE}_amd64.deb"
+          echo $DEB_NAME
+          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
+          sudo dpkg --install $DEB_NAME
+      - name: Run tests
+        run: make
+
+      - name: Archive common test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: CT results
+          path: _build/test/logs/**
+          retention-days: 1

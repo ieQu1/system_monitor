@@ -21,7 +21,7 @@
 
 -behaviour(gen_server).
 
--include_lib("system_monitor/include/system_monitor.hrl").
+-include("sysmon_int.hrl").
 
 %% API
 -export([start_link/0, timestamp/0]).
@@ -29,14 +29,12 @@
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
--export_type([function_top/0]).
-
 -define(SERVER, ?MODULE).
 
 -define(TOP_APP_TAB,   sysmon_top_app_tab).
 -define(TOP_INIT_CALL, sysmon_top_init_call).
 -define(TOP_CURR_FUN,  sysmon_top_curr_fun).
--define(TAB_OPTS, [private, named_table, set, {keypos, 1}]).
+-define(TAB_OPTS,      [private, named_table, set, {keypos, 1}]).
 
 -define(COUNT, diceroll_counter).
 
@@ -92,6 +90,7 @@ timestamp() ->
 %%%===================================================================
 
 init([]) ->
+  put(?COUNT, 0),
   {ok, TRef} = timer:send_after(sample_interval(), collect_data),
   {ok, #state{ timer       = TRef
              , last_ts     = timestamp()
@@ -107,7 +106,7 @@ handle_info(collect_data, State0) ->
   init_tables(),
   T1 = timestamp(),
   NumProcesses = erlang:system_info(process_count),
-  TooManyPids = NumProcesses > cfg(top_max_procs),
+  TooManyPids = NumProcesses > ?CFG(top_max_procs),
   Pids = case TooManyPids of
            false -> lists:sort(processes());
            true  -> lists:sort(get_vip_pids())
@@ -138,7 +137,7 @@ handle_info(_Info, State) ->
 
 -spec vip_names() -> [atom()].
 vip_names() ->
-  cfg(vips).
+  ?CFG(vips).
 
 -spec get_vip_pids() -> [pid()].
 get_vip_pids() ->
@@ -245,14 +244,15 @@ init_tables() ->
   ets:new(?TOP_CURR_FUN, ?TAB_OPTS),
   ets:new(?TOP_INIT_CALL, ?TAB_OPTS).
 
--spec finalize_aggr_top(non_neg_integer()) -> {[#app_top{}], function_top(), function_top()}.
+-spec finalize_aggr_top(non_neg_integer()) ->
+        {[#app_top{}], system_monitor:function_top(), system_monitor:function_top()}.
 finalize_aggr_top(NProc) ->
   #{ current_function := CurrFunThreshold
    , initial_call     := InitialCallThreshold
    , reductions       := ReductionsThreshold
    , memory           := MemThreshold
    , num_processes    := NProcCutoff
-   } = cfg(top_significance_threshold),
+   } = ?CFG(top_significance_threshold),
   %% Collect data:
   SampleSize = top_sample_size(),
   CurrFunTop = filter_nproc_results(?TOP_CURR_FUN, CurrFunThreshold, NProc, SampleSize),
@@ -295,7 +295,7 @@ filter_nproc_results(Tab, Threshold, NProc, SampleSize) ->
 
 -spec empty_top(non_neg_integer(), non_neg_integer()) -> #top_acc{}.
 empty_top(NProc, Dt) ->
-  Empty = system_monitor_top:empty(cfg(top_num_items)),
+  Empty = system_monitor_top:empty(?CFG(top_num_items)),
   SampleModulo = max(1, NProc div top_sample_size()),
   #top_acc{ is_vip         = make_vip_pred()
           , dt             = Dt
@@ -433,15 +433,11 @@ make_fake_proc(Now) ->
           , current_function   = {undefined, undefined, 0}
           }.
 
-cfg(Key) ->
-  {ok, Val} = application:get_env(?APP, Key),
-  Val.
-
 sample_interval() ->
-  cfg(top_sample_interval).
+  ?CFG(top_sample_interval).
 
 top_sample_size() ->
-  cfg(top_sample_size).
+  ?CFG(top_sample_size).
 
 diceroll(Mod) ->
   Cnt = get(?COUNT),

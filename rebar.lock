@@ -1,5 +1,9 @@
 {"1.2.0",
 [{<<"epgsql">>,{pkg,<<"epgsql">>,<<"4.5.0">>},0},
+ {<<"snabbkaffe">>,
+  {git,"https://github.com/kafka4beam/snabbkaffe",
+       {ref,"bbabb87ff624821612879ed9961b661c7df04e4e"}},
+  0},
  {<<"supervisor3">>,{pkg,<<"supervisor3">>,<<"1.1.9">>},0}]}.
 [
 {pkg_hash,[

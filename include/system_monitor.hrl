@@ -17,10 +17,6 @@
 -ifndef(SYSTEM_MONITOR_HRL).
 -define(SYSTEM_MONITOR_HRL, true).
 
--define(APP, system_monitor).
-
--type function_top() :: [{mfa(), number()}].
-
 -record(erl_top,
         { node                :: node()
         , ts                  :: integer()

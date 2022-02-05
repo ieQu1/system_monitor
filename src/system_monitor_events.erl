@@ -22,7 +22,7 @@
 
 -behaviour(gen_server).
 
--include("system_monitor.hrl").
+-include("sysmon_int.hrl").
 -include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0]).
@@ -93,7 +93,7 @@ setup_system_monitor() ->
 data_for_reference(Proc) when is_pid(Proc) orelse is_atom(Proc) ->
   case system_monitor:get_proc_info(Proc) of
     false      -> "Proc not in top";
-    ProcErlTop -> system_monitor:erl_top_to_str(ProcErlTop)
+    ProcErlTop -> system_monitor_lib:erl_top_to_str(ProcErlTop)
   end;
 data_for_reference(_Port) ->
   "".

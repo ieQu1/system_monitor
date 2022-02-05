@@ -30,7 +30,7 @@
 -behaviour(system_monitor_callback).
 -export([ start/0, stop/0, produce/2 ]).
 
--include_lib("system_monitor/include/system_monitor.hrl").
+-include("sysmon_int.hrl").
 -include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
@@ -230,15 +230,15 @@ node_role_query() ->
   <<"insert into node_role (node, ts, data) VALUES ($1, $2, $3);">>.
 
 params(fun_top, {fun_top, Node, TS, Key, Tag, Val} = _Event) ->
-  [atom_to_list(Node), ts_to_timestamp(TS), system_monitor:fmt_mfa(Key), Tag, Val];
+  [atom_to_list(Node), TS, system_monitor_lib:fmt_mfa(Key), Tag, Val];
 params(app_top, {app_top, Node, TS, Application, Tag, Val} = _Event) ->
   [atom_to_list(Node),
-   ts_to_timestamp(TS),
+   TS,
    atom_to_list(Application),
    atom_to_list(Tag),
    Val];
 params(node_role, {node_role, Node, TS, Bin}) ->
-  [atom_to_list(Node), ts_to_timestamp(TS), Bin];
+  [atom_to_list(Node), TS, Bin];
 params(proc_top,
        #erl_top{node = Node,
                 ts = TS,
@@ -258,24 +258,21 @@ params(proc_top,
                 group_leader = GL} =
          _Event) ->
   [atom_to_list(Node),
-   ts_to_timestamp(TS),
+   TS,
    Pid,
    DR,
    DM,
    R,
    M,
    MQL,
-   system_monitor:fmt_mfa(CF),
-   system_monitor:fmt_mfa(IC),
+   system_monitor_lib:fmt_mfa(CF),
+   system_monitor_lib:fmt_mfa(IC),
    name_to_list(RN),
    SS,
    HS,
    THS,
-   system_monitor:fmt_stack(CS),
+   system_monitor_lib:fmt_stack(CS),
    GL].
-
-ts_to_timestamp(TS) ->
-  calendar:system_time_to_universal_time(TS, native).
 
 name_to_list(Term) ->
   case io_lib:printable_latin1_list(Term) of
