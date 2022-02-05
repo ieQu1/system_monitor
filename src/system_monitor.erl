@@ -1,5 +1,6 @@
 %% -*- mode: erlang -*-
 %%--------------------------------------------------------------------------------
+%% Copyright 2022 k32
 %% Copyright 2021 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,7 +26,7 @@
 
 -include_lib("system_monitor/include/system_monitor.hrl").
 
--include_lib("hut/include/hut.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 %% API
 -export([start_link/0]).
@@ -51,7 +52,7 @@
         , terminate/2
         ]).
 
--include_lib("hut/include/hut.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
 -define(TICK_INTERVAL, 1000).
@@ -187,11 +188,10 @@ check_process_count() ->
   {ok, MaxProcs} = application:get_env(?APP, top_max_procs),
   case erlang:system_info(process_count) of
     Count when Count > MaxProcs div 5 ->
-      ?log( warning
-          , "Abnormal process count (~p).~n"
-          , [Count]
-          , #{domain => [system_monitor]}
-          );
+      ?LOG_WARNING( "Abnormal process count (~p).~n"
+                  , [Count]
+                  , #{domain => [system_monitor]}
+                  );
     _ -> ok
   end.
 
@@ -200,7 +200,7 @@ check_process_count() ->
 %% Monitor for processes with suspect stats
 %%------------------------------------------------------------------------------
 suspect_procs() ->
-  {_TS, ProcTop} = system_monitor_top:get_proc_top(),
+  {_TS, ProcTop} = system_monitor_collector:get_proc_top(),
   Env = fun(Name) -> application:get_env(?APP, Name, undefined) end,
   Conf =
     {Env(suspect_procs_max_memory),
@@ -227,7 +227,7 @@ is_suspect_proc(Proc, {MaxMemory, MaxMqLen, MaxTotalHeapSize}) ->
 log_suspect_proc(Proc) ->
   ErlTopStr = erl_top_to_str(Proc),
   Format = "Suspect Proc~n~s",
-  ?log(warning, Format, [ErlTopStr], #{domain => [system_monitor]}).
+  ?LOG_WARNING(Format, [ErlTopStr], #{domain => [system_monitor]}).
 
 %%------------------------------------------------------------------------------
 %% @doc Report top processes
@@ -237,7 +237,7 @@ report_full_status() ->
   %% `TS' variable should be used consistently in all following
   %% reports for this time interval, so it can be used as a key to
   %% lookup the relevant events
-  {TS, ProcTop} = system_monitor_top:get_proc_top(),
+  {TS, ProcTop} = system_monitor_collector:get_proc_top(),
   system_monitor_callback:produce(proc_top, ProcTop),
   report_app_top(TS),
   %% Node status report goes last, and it "seals" the report for this
@@ -262,15 +262,15 @@ report_full_status() ->
 %%------------------------------------------------------------------------------
 -spec report_app_top(integer()) -> ok.
 report_app_top(TS) ->
-  AppReds  = system_monitor_top:get_abs_app_top(),
+  AppReds  = system_monitor_collector:get_abs_app_top(),
   present_results(app_top, reductions, AppReds, TS),
-  AppMem   = system_monitor_top:get_app_memory(),
+  AppMem   = system_monitor_collector:get_app_memory(),
   present_results(app_top, memory, AppMem, TS),
-  AppProcs = system_monitor_top:get_app_processes(),
+  AppProcs = system_monitor_collector:get_app_processes(),
   present_results(app_top, processes, AppProcs, TS),
   #{ current_function := CurrentFunction
    , initial_call := InitialCall
-   } = system_monitor_top:get_function_top(),
+   } = system_monitor_collector:get_function_top(),
   present_results(fun_top, current_function, CurrentFunction, TS),
   present_results(fun_top, initial_call, InitialCall, TS),
   ok.

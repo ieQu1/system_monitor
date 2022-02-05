@@ -92,7 +92,7 @@ More information about configurable options is found [here](src/system_monitor.a
 
 System_monitor will spawn several processes that handle different states:
 
-* `system_monitor_top`
+* `system_monitor_collector`
   Collects a certain amount of data from BEAM for a preconfigured number of processes
 * `system_monitor_events`
   Subscribes to certain types of preconfigured BEAM events such as: busy_port, long_gc, long_schedule etc
@@ -106,7 +106,7 @@ System_monitor will spawn several processes that handle different states:
 * `suspect_procs`
   Logs if it detects processes with suspiciously high memory
 * `report_full_status`
-  Gets the state from `system_monitor_top` and produces to a backend module
+  Gets the state from `system_monitor_collector` and produces to a backend module
   that implements the `system_monitor_callback` behavior, selected by binding
   `callback_mod` in the `system_monitor` application environment to that module.
   If `callback_mod` is unbound, this monitor is disabled.
@@ -114,7 +114,7 @@ System_monitor will spawn several processes that handle different states:
 
 `system_monitor_pg` allows for Postgres being temporary down by storing the stats in its own internal buffer.
 This buffer is built with a sliding window that will stop the state from growing too big whenever
-Postgres is down for too long. On top of this `system_monitor_pg` has a built-in load 
+Postgres is down for too long. On top of this `system_monitor_pg` has a built-in load
 shedding mechanism that protects itself once the message length queue grows bigger than a certain level.
 
 ## Local development

@@ -1,4 +1,5 @@
 %%--------------------------------------------------------------------------------
+%% Copyright 2022 k32
 %% Copyright 2020 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,23 +19,7 @@
 
 -define(APP, system_monitor).
 
--type function_top() ::
-        #{ initial_call     => [{mfa(), number()}]
-         , current_function => [{mfa(), number()}]
-         }.
-
--record(pid_info,
-        { pid                 :: pid()
-        , initial_call        :: mfa() | undefined
-        , registered_name     :: atom() | []
-        , current_function    :: mfa() | undefined
-        , reductions          :: integer()
-        , dreductions         :: number() | undefined
-        , memory              :: integer()
-        , dmemory             :: number() | undefined
-        , message_queue_len   :: integer()
-        , group_leader        :: pid()
-        }).
+-type function_top() :: [{mfa(), number()}].
 
 -record(erl_top,
         { node                :: node()

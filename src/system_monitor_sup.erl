@@ -1,4 +1,5 @@
 %%--------------------------------------------------------------------------------
+%% Copyright 2022 k32
 %% Copyright 2020 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -72,7 +73,7 @@ init(?SUP2) ->
     %% The second-level supervisor allows some restarts. This is where the
     %% normal services live.
     {ok, {{one_for_one, 10, 20},
-          [ worker(system_monitor_top)
+          [ worker(system_monitor_collector)
           , worker(system_monitor_events)
           , worker(system_monitor)
           ]
