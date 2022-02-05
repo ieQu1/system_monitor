@@ -24,9 +24,7 @@
 -include_lib("system_monitor/include/system_monitor.hrl").
 
 %% API
--export([start_link/0, get_app_top/0, get_abs_app_top/0,
-         get_app_memory/0, get_app_processes/0,
-         get_function_top/0, get_proc_top/0, get_proc_top/1]).
+-export([start_link/0, timestamp/0]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -40,41 +38,40 @@
 -define(TOP_CURR_FUN,  sysmon_top_curr_fun).
 -define(TAB_OPTS, [private, named_table, set, {keypos, 1}]).
 
+-define(COUNT, diceroll_counter).
+
 %% Type and record definitions
 
 -define(HIST(PID, REDS, MEM), {PID, REDS, MEM}).
 
 -record(state,
-        { timer                 :: timer:tref()
-        , old_data         = [] :: [hist()]
-        , last_ts               :: integer()
-        , proc_top         = [] :: [#erl_top{}]
-        , app_top          = [] :: [#app_top{}]
-        , initial_call_top = [] :: function_top()
-        , current_fun_top  = [] :: function_top()
+        { timer                :: timer:tref()
+        , old_data        = [] :: [hist()]
+        , last_ts              :: integer()
+        , time_to_collect = 0  :: non_neg_integer()
         }).
 
 -record(delta,
         { pid      :: pid()
         , reg_name :: atom()
         , reds     :: non_neg_integer()
-        , dreds    :: number()
+        , dreds    :: non_neg_integer()
         , memory   :: non_neg_integer()
-        , dmemory  :: number()
+        , dmemory  :: non_neg_integer()
         , mql      :: non_neg_integer()
         }).
 
 -record(top_acc,
-        { is_vip             :: fun((atom()) -> boolean())
-        , dt                 :: float()
-        , hist_data          :: [hist()]
-        , sample_probability :: float()
+        { is_vip        :: fun((atom()) -> boolean())
+        , dt            :: non_neg_integer()
+        , hist_data     :: [hist()]
+        , sample_modulo :: non_neg_integer()
         %% Tops
-        , vips               :: [#delta{}]
-        , memory             :: system_monitor_top:top()
-        , dmemory            :: system_monitor_top:top()
-        , dreds              :: system_monitor_top:top()
-        , mql                :: system_monitor_top:top()
+        , vips          :: [#delta{}]
+        , memory        :: system_monitor_top:top()
+        , dmemory       :: system_monitor_top:top()
+        , dreds         :: system_monitor_top:top()
+        , mql           :: system_monitor_top:top()
         }).
 
 -type hist() :: ?HIST(pid(), non_neg_integer(), non_neg_integer()).
@@ -83,51 +80,12 @@
 %%% API
 %%%===================================================================
 
-%% @doc Get Erlang process top
--spec get_proc_top() -> {integer(), [#erl_top{}]}.
-get_proc_top() ->
-  {ok, Data} = gen_server:call(?SERVER, get_proc_top, infinity),
-  Data.
-
-%% @doc Get Erlang process top info for one process
--spec get_proc_top(pid()) -> #erl_top{} | false.
-get_proc_top(Pid) ->
-  gen_server:call(?SERVER, {get_proc_top, Pid}, infinity).
-
-%% @doc Get relative reduction utilization per application, sorted by
-%% reductions
--spec get_app_top() -> [{atom(), float()}].
-get_app_top() ->
-  do_get_app_top(#app_top.red_rel).
-
-%% @doc Get absolute reduction utilization per application, sorted by
-%% reductions
--spec get_abs_app_top() -> [{atom(), integer()}].
-get_abs_app_top() ->
-  do_get_app_top(#app_top.red_abs).
-
-%% @doc Get memory utilization per application, sorted by memory
--spec get_app_memory() -> [{atom(), integer()}].
-get_app_memory() ->
-  do_get_app_top(#app_top.memory).
-
-%% @doc Get number of processes spawned by each application
--spec get_app_processes() -> [{atom(), integer()}].
-get_app_processes() ->
-  do_get_app_top(#app_top.processes).
-
-%% @doc Get approximate distribution of initilal_call and
-%% current_function per process
--spec get_function_top() -> #{ initial_call     := function_top()
-                             , current_function := function_top()
-                             }.
-get_function_top() ->
-  {ok, Data} = gen_server:call(?SERVER, get_function_top, infinity),
-  Data.
-
 -spec start_link() -> {ok, pid()} | ignore | {error, term()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
+
+timestamp() ->
+  erlang:system_time(microsecond).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -139,22 +97,6 @@ init([]) ->
              , last_ts     = timestamp()
              }}.
 
-handle_call(get_proc_top, _From, State) ->
-  Top = State#state.proc_top,
-  SnapshotTS = State#state.last_ts,
-  Data = {SnapshotTS, Top},
-  {reply, {ok, Data}, State};
-handle_call({get_proc_top, Pid}, _From, State) ->
-  Top = State#state.proc_top,
-  {reply, lists:keyfind(pid_to_list(Pid), #erl_top.pid, Top), State};
-handle_call(get_app_top, _From, State) ->
-  Data = State#state.app_top,
-  {reply, {ok, Data}, State};
-handle_call(get_function_top, _From, State) ->
-  Data = #{ initial_call     => State#state.initial_call_top
-          , current_function => State#state.current_fun_top
-          },
-  {reply, {ok, Data}, State};
 handle_call(_Msg, _From, State) ->
   {reply, {error, bad_call}, State}.
 
@@ -165,16 +107,23 @@ handle_info(collect_data, State0) ->
   init_tables(),
   T1 = timestamp(),
   NumProcesses = erlang:system_info(process_count),
-  Pids = case NumProcesses < cfg(top_max_procs) of
-           true  -> lists:sort(processes());
-           false -> lists:sort(get_vip_pids())
+  TooManyPids = NumProcesses > cfg(top_max_procs),
+  Pids = case TooManyPids of
+           false -> lists:sort(processes());
+           true  -> lists:sort(get_vip_pids())
          end,
-  State1 = update_proc_top(State0, T1, Pids),
-  State = finalize_aggr_top(State1, NumProcesses),
+  {ProcTop, State} = collect_proc_top(State0, T1, Pids, TooManyPids),
+  {AppTop, InitCallTop, CurrFunTop} = finalize_aggr_top(NumProcesses),
+  %% Report the collected data:
+  system_monitor:report_data(T1, {ProcTop, AppTop, InitCallTop, CurrFunTop}),
+  %% Prepare for the next iteration:
   T2 = timestamp(),
-  SleepTime = max(500, sample_interval() - (T2 - T1)),
+  LastRunTime = T2 - T1,
+  SleepTime = max(500, sample_interval() - LastRunTime),
+  erlang:garbage_collect(self()),
   {ok, TRef} = timer:send_after(SleepTime, collect_data),
-  {noreply, State#state{ timer = TRef
+  {noreply, State#state{ timer           = TRef
+                       , time_to_collect = LastRunTime
                        }};
 handle_info(_Info, State) ->
   {noreply, State}.
@@ -212,15 +161,14 @@ make_vip_pred() ->
 %% Proc top collection
 %%--------------------------------------------------------------------
 
--spec update_proc_top(#state{}, integer(), [pid()]) -> #state{}.
-update_proc_top(State = #state{old_data = OldData, last_ts = LastTs}, Now, Pids) ->
+-spec collect_proc_top(#state{}, integer(), [pid()], boolean()) -> {[#erl_top{}], #state{}}.
+collect_proc_top(State = #state{old_data = OldData, last_ts = LastTs}, Now, Pids, TooManyPids) ->
   Dt = max(1, Now - LastTs),
   {Deltas, NewData} = top_deltas(OldData, Pids, Dt),
-  State#state{ old_data = NewData
-             , proc_top = [enrich(I, Now) || I <- Deltas]
-             }.
+  ProcTop = [make_fake_proc(Now) || TooManyPids] ++ [enrich(I, Now) || I <- Deltas],
+  {ProcTop, State#state{old_data = NewData}}.
 
--spec top_deltas([hist()], [pid()], float()) -> {[#delta{}], [hist()]}.
+-spec top_deltas([hist()], [pid()], non_neg_integer()) -> {[#delta{}], [hist()]}.
 top_deltas(OldData, Pids, Dt) ->
   Acc = go(OldData, Pids, empty_top(length(Pids), Dt)),
   {top_to_list(Acc), Acc#top_acc.hist_data}.
@@ -251,8 +199,8 @@ update_acc( ?HIST(Pid, OldReds, OldMem)
           ) ->
   case get_pid_info(Pid) of
     {RegName, Reds, Mem, MQL} ->
-      DReds = (Reds - OldReds) / Dt,
-      DMem = (Mem  - OldMem) / Dt,
+      DReds = (Reds - OldReds) div Dt,
+      DMem = (Mem  - OldMem) div Dt,
       Delta = #delta{ reg_name = RegName
                     , pid      = Pid
                     , reds     = Reds
@@ -262,7 +210,7 @@ update_acc( ?HIST(Pid, OldReds, OldMem)
                     , mql      = MQL
                     },
       Acc = maybe_push_to_top(Acc0, Delta),
-      diceroll(Acc#top_acc.sample_probability) andalso
+      diceroll(Acc#top_acc.sample_modulo) andalso
         maybe_update_aggr_top(Delta),
       Acc#top_acc{ hist_data = [?HIST(Pid, Reds, Mem) | Histories]
                  };
@@ -287,7 +235,7 @@ maybe_update_aggr_top(#delta{ pid    = Pid
       App = application_controller:get_application(GL),
       ets:update_counter(?TOP_CURR_FUN, CurrentFunction, {2, 1}, {CurrentFunction, 0}),
       ets:update_counter(?TOP_INIT_CALL, InitialCall, {2, 1}, {InitialCall, 0}),
-      ets:update_counter(?TOP_APP_TAB, App, [{2, 1}, {3, round(DReds)}, {4, Memory}], {App, 0, 0, 0}),
+      ets:update_counter(?TOP_APP_TAB, App, [{2, 1}, {3, DReds}, {4, Memory}], {App, 0, 0, 0}),
       ok
   end.
 
@@ -297,8 +245,8 @@ init_tables() ->
   ets:new(?TOP_CURR_FUN, ?TAB_OPTS),
   ets:new(?TOP_INIT_CALL, ?TAB_OPTS).
 
--spec finalize_aggr_top(#state{}, non_neg_integer()) -> #state{}.
-finalize_aggr_top(State, NProc) ->
+-spec finalize_aggr_top(non_neg_integer()) -> {[#app_top{}], function_top(), function_top()}.
+finalize_aggr_top(NProc) ->
   #{ current_function := CurrFunThreshold
    , initial_call     := InitialCallThreshold
    , reductions       := ReductionsThreshold
@@ -314,10 +262,7 @@ finalize_aggr_top(State, NProc) ->
   ets:delete(?TOP_APP_TAB),
   ets:delete(?TOP_CURR_FUN),
   ets:delete(?TOP_INIT_CALL),
-  State#state{ app_top          = AppTop
-             , initial_call_top = InitCallTop
-             , current_fun_top  = CurrFunTop
-             }.
+  {AppTop, InitCallTop, CurrFunTop}.
 
 filter_app_top(NProcCutoff, ReductionsThreshold, MemThreshold) ->
   L = ets:tab2list(?TOP_APP_TAB),
@@ -348,19 +293,19 @@ filter_nproc_results(Tab, Threshold, NProc, SampleSize) ->
 %% Top accumulator manipulation
 %%--------------------------------------------------------------------
 
--spec empty_top(non_neg_integer(), float()) -> #top_acc{}.
+-spec empty_top(non_neg_integer(), non_neg_integer()) -> #top_acc{}.
 empty_top(NProc, Dt) ->
   Empty = system_monitor_top:empty(cfg(top_num_items)),
-  SampleProbability = NProc / top_sample_size(),
-  #top_acc{ is_vip             = make_vip_pred()
-          , dt                 = Dt
-          , hist_data          = []
-          , sample_probability = SampleProbability
-          , vips               = []
-          , memory             = Empty
-          , dmemory            = Empty
-          , dreds              = Empty
-          , mql                = Empty
+  SampleModulo = max(1, NProc div top_sample_size()),
+  #top_acc{ is_vip         = make_vip_pred()
+          , dt             = Dt
+          , hist_data      = []
+          , sample_modulo  = SampleModulo
+          , vips           = []
+          , memory         = Empty
+          , dmemory        = Empty
+          , dreds          = Empty
+          , mql            = Empty
           }.
 
 -spec maybe_push_to_top(#top_acc{}, #delta{}) -> #top_acc{}.
@@ -423,7 +368,7 @@ enrich(#delta{ pid      = Pid
   #erl_top{ node               = node()
           , ts                 = Now
           , pid                = pid_to_list(Pid)
-          , group_leader       = GL
+          , group_leader       = ensure_list(GL)
           , dreductions        = DReds
           , dmemory            = DMem
           , reductions         = Reds
@@ -468,12 +413,29 @@ initial_call(Info)  ->
 %% Misc
 %%--------------------------------------------------------------------
 
+make_fake_proc(Now) ->
+  Infinity = 999999999,
+  #erl_top{ node               = node()
+          , ts                 = Now
+          , pid                = "!!!"
+          , group_leader       = "!!!"
+          , dreductions        = Infinity
+          , dmemory            = Infinity
+          , reductions         = Infinity
+          , memory             = Infinity
+          , message_queue_len  = Infinity
+          , initial_call       = {undefined, undefined, 0}
+          , registered_name    = too_many_processes
+          , stack_size         = Infinity
+          , heap_size          = Infinity
+          , total_heap_size    = Infinity
+          , current_stacktrace = []
+          , current_function   = {undefined, undefined, 0}
+          }.
+
 cfg(Key) ->
   {ok, Val} = application:get_env(?APP, Key),
   Val.
-
-timestamp() ->
-  erlang:monotonic_time(microsecond).
 
 sample_interval() ->
   cfg(top_sample_interval).
@@ -481,15 +443,15 @@ sample_interval() ->
 top_sample_size() ->
   cfg(top_sample_size).
 
-diceroll(Probability) ->
-  rand:uniform() < Probability.
+diceroll(Mod) ->
+  Cnt = get(?COUNT),
+  put(?COUNT, Cnt + 1),
+  (Cnt rem Mod) =:= 0.
 
--spec do_get_app_top(integer()) -> [{atom(), number()}].
-do_get_app_top(FieldId) ->
-  {ok, Data} = gen_server:call(?SERVER, get_app_top, infinity),
-  lists:reverse(
-    lists:keysort(2, [{Val#app_top.app, element(FieldId, Val)}
-                      || Val <- Data])).
+ensure_list(Pid) when is_pid(Pid) ->
+  pid_to_list(Pid);
+ensure_list(Str) ->
+  Str.
 
 %%%_* Emacs ============================================================
 %%% Local Variables:

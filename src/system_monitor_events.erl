@@ -90,9 +90,9 @@ setup_system_monitor() ->
   erlang:system_monitor(self(), Opts),
   ok.
 
-data_for_reference(Pid) when is_pid(Pid) ->
-  case system_monitor_collector:get_proc_top(Pid) of
-    false -> "Proc not in top";
+data_for_reference(Proc) when is_pid(Proc) orelse is_atom(Proc) ->
+  case system_monitor:get_proc_info(Proc) of
+    false      -> "Proc not in top";
     ProcErlTop -> system_monitor:erl_top_to_str(ProcErlTop)
   end;
 data_for_reference(_Port) ->

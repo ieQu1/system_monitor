@@ -37,7 +37,7 @@
         , heap_size           :: integer() %% words
         , total_heap_size     :: integer() %% words
         , current_stacktrace  :: list()
-        , group_leader        :: list()
+        , group_leader        :: string()
         }).
 
 -record(app_top,
