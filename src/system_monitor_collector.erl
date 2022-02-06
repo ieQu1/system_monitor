@@ -60,7 +60,7 @@
         }).
 
 -record(top_acc,
-        { is_vip        :: fun((atom()) -> boolean())
+        { is_vip        :: #{atom() => _}
         , dt            :: non_neg_integer()
         , hist_data     :: [hist()]
         , sample_modulo :: non_neg_integer()
@@ -151,10 +151,9 @@ get_vip_pids() ->
              , vip_names()
              ).
 
--spec make_vip_pred() -> fun((atom()) -> boolean()).
-make_vip_pred() ->
-  Map = maps:from_list([{I, []} || I <- vip_names()]),
-  fun(Name) -> maps:is_key(Name, Map) end.
+-spec make_is_vip() -> #{atom() => []}.
+make_is_vip() ->
+  maps:from_list([{I, []} || I <- vip_names()]).
 
 %%--------------------------------------------------------------------
 %% Proc top collection
@@ -297,7 +296,7 @@ filter_nproc_results(Tab, Threshold, NProc, SampleSize) ->
 empty_top(NProc, Dt) ->
   Empty = system_monitor_top:empty(?CFG(top_num_items)),
   SampleModulo = max(1, NProc div top_sample_size()),
-  #top_acc{ is_vip         = make_vip_pred()
+  #top_acc{ is_vip         = make_is_vip()
           , dt             = Dt
           , hist_data      = []
           , sample_modulo  = SampleModulo
@@ -317,7 +316,7 @@ maybe_push_to_top(#top_acc{ is_vip             = IsVip
                           , mql                = GMQL
                           } = Acc,
                   Delta) ->
-  Acc#top_acc{ vips    = [Delta || IsVip(Delta#delta.reg_name)] ++ GVIPs
+  Acc#top_acc{ vips    = [Delta || maps:is_key(Delta#delta.reg_name, IsVip)] ++ GVIPs
              , memory  = system_monitor_top:push(#delta.memory,  Delta, GMem)
              , dmemory = system_monitor_top:push(#delta.dmemory, Delta, GDMem)
              , dreds   = system_monitor_top:push(#delta.dreds,   Delta, GDReds)

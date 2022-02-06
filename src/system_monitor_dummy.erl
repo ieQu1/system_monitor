@@ -27,8 +27,9 @@
 start() ->
   ok.
 
-produce(_Type, _Msg) ->
-  ?tp(sysmon_dummy_produce, #{type => _Type, msg => _Msg}).
+produce(_Type, Events) ->
+  [?tp(sysmon_produce, #{type => _Type, msg => _Msg, backend => dummy}) || _Msg <- Events],
+  ok.
 
 %%================================================================================
 %% Internal functions

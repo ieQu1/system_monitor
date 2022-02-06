@@ -56,9 +56,13 @@
       %% function()}', for example: `{my_app, node_status}'. This
       %% function should return an HTML-formatted status report:
     , {node_status_fun, undefined}
-      %% List of additional status check functions:
-    , {status_checks, []}
-
+      %% List of status check functions: The format is
+      %%
+      %% `{Module, FunctionName, RunAtTerminate, Interval(Ticks)}'
+    , {status_checks, [ {system_monitor, check_process_count, false, 30}
+                      , {system_monitor, suspect_procs, false, 5}
+                      ]}
+    , {tick_interval, 1000}
       %% BEAM event settings:
     , {beam_events,
        [ busy_port
