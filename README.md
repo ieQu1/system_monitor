@@ -3,11 +3,20 @@
 
 `system_monitor` is a BEAM VM monitoring and introspection application
 that helps troubleshooting live systems. It collects various
-information about Erlang processes and applications.
-Unlike `observer`, `system_monitor` does not require
-connecting to the monitored system via Erlang distribution protocol,
-and can be used to monitor systems with very tight access
-restrictions.
+information about Erlang and Elixir processes and applications.
+
+Unlike `observer`, `system_monitor` it does not require connecting to
+the monitored system via Erlang distribution protocol, and can be used
+to monitor systems with very tight access restrictions. It can happily
+monitor systems with millions of processes.
+
+By default the data is stored in a Postgres database, and visualized
+using Grafana. Ready to use docker images of
+[Postgres](https://github.com/k32/grafana-dashboards/pkgs/container/sysmon-postgres)
+with the necessary schema and
+[Grafana](https://github.com/k32/grafana-dashboards/pkgs/container/sysmon-grafana)
+with the dashboards are provided. See
+[documentation](https://github.com/k32/grafana-dashboards).
 
 ## Features
 
@@ -43,12 +52,31 @@ In order to integrate `system_monitor` into your system, simply add it
 to the release apps. Add the following lines to `rebar.config`:
 
 ```erlang
-{deps, [..., system_monitor]}.
+{deps,
+ [ {system_monitor, {git, "https://github.com/k32/system_monitor", {tag, "3.1.0"}}}
+ ]}.
 
 {relx,
  [ {release, {my_release, "1.0.0"},
     [kernel, sasl, ..., system_monitor]}
  ]}.
+```
+
+Or to `mix.exs` for Elixir:
+
+```elixir
+defp deps() do
+    [
+        {:system_monitor, github: "k32/system_monitor", tag: "3.1.0"}
+    ]
+end
+```
+
+To enable export to Postgres:
+
+```erlang
+application:load(system_monitor),
+application:set_env(system_monitor, callback_mod, system_monitor_pg)
 ```
 
 ### Custom node status
@@ -76,24 +104,11 @@ This callback then needs to be added to the system_monitor application
 environment:
 
 ```erlang
-{system_monitor,
-   [ {node_status_fun, {foo, node_status}}
-   ...
-   ]}
+application:set_env(system_monitor, node_status_fun, {?MODULE, node_status})
 ```
 
-More information about configurable options is found [here](src/system_monitor.app.src).
-
-## How it all works out
-
-System_monitor will spawn several processes that handle different states:
-
-* `system_monitor_collector`
-  Collects a certain amount of data from BEAM for a preconfigured number of processes
-* `system_monitor_events`
-  Subscribes to certain types of preconfigured BEAM events such as: busy_port, long_gc, long_schedule etc
-* `system_monitor`
-  Runs periodically a set of preconfigured `monitors`
+More information about configurable options and the defaults is found
+[here](src/system_monitor.app.src).
 
 ### What are the preconfigured monitors
 
@@ -101,12 +116,6 @@ System_monitor will spawn several processes that handle different states:
   Logs if the process_count passes a certain threshold
 * `suspect_procs`
   Logs if it detects processes with suspiciously high memory
-* `report_full_status`
-  Gets the state from `system_monitor_collector` and produces to a backend module
-  that implements the `system_monitor_callback` behavior, selected by binding
-  `callback_mod` in the `system_monitor` application environment to that module.
-  If `callback_mod` is unbound, this monitor is disabled.
-  The preconfigured backend is Postgres and is implemented via `system_monitor_pg`.
 
 `system_monitor_pg` allows for Postgres being temporary down by storing the stats in its own internal buffer.
 This buffer is built with a sliding window that will stop the state from growing too big whenever
@@ -121,5 +130,3 @@ See our [changelog](CHANGELOG.md).
 
 Copyright © 2020 Klarna Bank AB
 Copyright © 2021-2022 k32
-
-For license details, see Klarna Bank ABthe [LICENSE](LICENSE) file in the root of this project.

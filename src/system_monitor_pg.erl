@@ -98,15 +98,7 @@ handle_cast({produce, Type, Events}, #{connection := Conn, buffer := Buffer} = S
       {noreply, State};
     _ ->
       lists:foreach(fun({Type0, Events0}) ->
-                      lists:foreach(fun(Event) ->
-                                        {ok, _} = epgsql:equery(Conn,
-                                                                query(Type0),
-                                                                params(Type0, Event)),
-                                        ?tp(sysmon_produce, #{ type    => Type
-                                                             , msg     => Event
-                                                             , backend => pg
-                                                             })
-                                    end, Events0)
+                        lists:foreach(fun(Event) -> run_query(Conn, Type0, Event) end, Events0)
                     end, buffer_to_list(buffer_add(Buffer, {Type, Events}))),
       {noreply, State#{buffer => buffer_new()}}
   end.
@@ -136,6 +128,23 @@ buffer_to_list({_, Buffer}) ->
   queue:to_list(Buffer).
 
 %%%_* Internal functions ======================================================
+
+run_query(Conn, Type, Event) ->
+  case epgsql:equery(Conn,
+                     query(Type),
+                     params(Type, Event)) of
+    {ok, _} ->
+      ?tp(sysmon_produce, #{ type    => Type
+                           , msg     => Event
+                           , backend => pg
+                           });
+    Err ->
+      ?tp(debug, system_monitor_pg_query_error,
+          #{ query => Type
+           , error => Err
+           })
+  end.
+
 initialize() ->
   case connect() of
     undefined ->
@@ -161,7 +170,8 @@ connect_options() ->
     password => ?CFG(db_password),
     database => ?CFG(db_name),
     timeout => ?CFG(db_connection_timeout),
-    codecs => []}.
+    codecs => []
+   }.
 
 mk_partitions(Conn) ->
   DaysAhead = application:get_env(system_monitor, partition_days_ahead, 10),
@@ -174,17 +184,17 @@ mk_partitions(Conn) ->
   lists:foreach(fun(Day) -> delete_partition_tables(Conn, Day) end, DaysBehindL).
 
 create_partition_tables(Conn, Day) ->
-  Tables = [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_role">>],
+  Tables = [<<"prc">>, <<"app_top">>, <<"initial_fun_top">>, <<"current_fun_top">>, <<"node_status">>],
   From = to_postgres_date(Day),
   To = to_postgres_date(Day + 1),
   lists:foreach(fun(Table) ->
-                   Query = create_partition_query(Table, Day, From, To),
-                   [{ok, [], []}, {ok, [], []}] = epgsql:squery(Conn, Query)
+                    Query = create_partition_query(Table, Day, From, To),
+                    [{ok, [], []}, {ok, [], []}] = epgsql:squery(Conn, Query)
                 end,
                 Tables).
 
 delete_partition_tables(Conn, Day) ->
-  Tables = [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_role">>],
+  Tables = [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_status">>],
   lists:foreach(fun(Table) ->
                    Query = delete_partition_query(Table, Day),
                    {ok, [], []} = epgsql:squery(Conn, Query)
@@ -207,12 +217,14 @@ to_postgres_date(GDays) ->
   {YY, MM, DD} = calendar:gregorian_days_to_date(GDays),
   lists:flatten(io_lib:format("~w-~2..0w-~2..0w", [YY, MM, DD])).
 
-query(fun_top) ->
-  fun_top_query();
+query(initial_fun_top) ->
+  fun_top_query("initial");
+query(current_fun_top) ->
+  fun_top_query("current");
 query(app_top) ->
   app_top_query();
-query(node_role) ->
-  node_role_query();
+query(node_status) ->
+  node_status_query();
 query(proc_top) ->
   prc_query().
 
@@ -223,23 +235,40 @@ prc_query() ->
     "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16);">>.
 
 app_top_query() ->
-  <<"insert into app_top (node, ts, application, unit, value) VALUES ($1, $2, $3, $4, $5);">>.
+  <<"insert into app_top (node, ts, application, red_abs, red_rel, memory, num_processes)"
+    " VALUES ($1, $2, $3, $4, $5, $6, $7);">>.
 
-fun_top_query() ->
-  <<"insert into fun_top (node, ts, fun, fun_type, num_processes) VALUES ($1, $2, $3, $4, $5);">>.
+fun_top_query(Top) ->
+  iolist_to_binary(
+    [<<"insert into ">>,
+     Top,
+     <<"_fun_top(node, ts, fun, percent_processes) VALUES ($1, $2, $3, $4);">>]).
 
-node_role_query() ->
-  <<"insert into node_role (node, ts, data) VALUES ($1, $2, $3);">>.
+node_status_query() ->
+  <<"insert into node_status (node, ts, data) VALUES ($1, $2, $3);">>.
 
-params(fun_top, {fun_top, Node, TS, Key, Tag, Val} = _Event) ->
-  [atom_to_list(Node), ts_to_timestamp(TS), system_monitor_lib:fmt_mfa(Key), Tag, Val];
-params(app_top, {app_top, Node, TS, Application, Tag, Val} = _Event) ->
+params(Top, {Node, TS, Function, PercentProcesses}) when Top =:= initial_fun_top;
+                                                         Top =:= current_fun_top ->
   [atom_to_list(Node),
    ts_to_timestamp(TS),
-   atom_to_list(Application),
-   atom_to_list(Tag),
-   Val];
-params(node_role, {node_role, Node, TS, Bin}) ->
+   system_monitor_lib:fmt_mfa(Function),
+   PercentProcesses];
+params(app_top,
+       #app_top{app = App,
+                ts = TS,
+                red_abs = RedAbs,
+                red_rel = RedRel,
+                memory = Mem,
+                processes = NumProcesses
+               }) ->
+  [atom_to_binary(node(), latin1),
+   ts_to_timestamp(TS),
+   atom_to_binary(App, latin1),
+   RedAbs,
+   RedRel,
+   Mem,
+   NumProcesses];
+params(node_status, {node_status, Node, TS, Bin}) ->
   [atom_to_list(Node), ts_to_timestamp(TS), Bin];
 params(proc_top,
        #erl_top{node = Node,

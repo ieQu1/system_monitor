@@ -19,7 +19,7 @@
 
 -record(erl_top,
         { node                :: node()
-        , ts                  :: integer()
+        , ts                  :: system_monitor_lib:ts()
         , pid                 :: string()
         , dreductions         :: integer()
         , dmemory             :: integer()
@@ -38,6 +38,7 @@
 
 -record(app_top,
         { app                 :: atom()
+        , ts                  :: system_monitor_lib:ts()
         , red_abs             :: integer()
         , red_rel             :: float()
         , memory              :: integer()

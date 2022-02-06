@@ -24,15 +24,18 @@
         , fmt_mfa/1
         , find_first/3
         , erl_top_to_str/1
+        , timestamp/0
         ]).
 
--export_type([]).
+-export_type([ts/0]).
 
 -include("sysmon_int.hrl").
 
 %%================================================================================
 %% Type declarations
 %%================================================================================
+
+-type ts() :: integer().
 
 %%================================================================================
 %% API funcions
@@ -110,6 +113,10 @@ erl_top_to_str(Proc) ->
      system_monitor_lib:fmt_mfa(CurrentFunction),
      system_monitor_lib:fmt_stack(CurrentStack)],
   io_lib:format(Format, Args).
+
+-spec timestamp() -> ts().
+timestamp() ->
+  erlang:system_time(microsecond).
 
 %%================================================================================
 %% Internal functions

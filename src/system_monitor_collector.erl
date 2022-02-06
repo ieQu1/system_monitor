@@ -24,7 +24,7 @@
 -include("sysmon_int.hrl").
 
 %% API
--export([start_link/0, timestamp/0, add_vip/1, remove_vip/1]).
+-export([start_link/0, add_vip/1, remove_vip/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -45,7 +45,7 @@
 -record(state,
         { timer                :: timer:tref()
         , old_data        = [] :: [hist()]
-        , last_ts              :: integer()
+        , last_ts              :: system_monitor_lib:ts()
         , time_to_collect = 0  :: non_neg_integer()
         }).
 
@@ -94,9 +94,6 @@ remove_vip(RegName) ->
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 
-timestamp() ->
-  erlang:system_time(microsecond).
-
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
@@ -105,7 +102,7 @@ init([]) ->
   put(?COUNT, 0),
   {ok, TRef} = timer:send_after(sample_interval(), collect_data),
   {ok, #state{ timer       = TRef
-             , last_ts     = timestamp()
+             , last_ts     = system_monitor_lib:timestamp()
              }}.
 
 handle_call({add_vip, RegNames}, _From, State) ->
@@ -122,7 +119,7 @@ handle_cast(_Msg, State) ->
 
 handle_info(collect_data, State0) ->
   init_tables(),
-  T1 = timestamp(),
+  T1 = system_monitor_lib:timestamp(),
   NumProcesses = erlang:system_info(process_count),
   TooManyPids = NumProcesses > ?CFG(top_max_procs),
   Pids = case TooManyPids of
@@ -130,11 +127,11 @@ handle_info(collect_data, State0) ->
            true  -> lists:sort(get_vip_pids())
          end,
   {ProcTop, State} = collect_proc_top(State0, T1, Pids, TooManyPids),
-  {AppTop, InitCallTop, CurrFunTop} = finalize_aggr_top(NumProcesses),
+  {AppTop, InitCallTop, CurrFunTop} = finalize_aggr_top(T1, NumProcesses),
   %% Report the collected data:
   system_monitor:report_data(T1, {ProcTop, AppTop, InitCallTop, CurrFunTop}),
   %% Prepare for the next iteration:
-  T2 = timestamp(),
+  T2 = system_monitor_lib:timestamp(),
   LastRunTime = T2 - T1,
   SleepTime = max(500, sample_interval() - LastRunTime),
   erlang:garbage_collect(self()),
@@ -264,21 +261,22 @@ init_tables() ->
   ets:new(?TOP_CURR_FUN, ?TAB_OPTS),
   ets:new(?TOP_INIT_CALL, ?TAB_OPTS).
 
--spec finalize_aggr_top(non_neg_integer()) ->
+-spec finalize_aggr_top(system_monitor_lib:ts(), non_neg_integer()) ->
         {[#app_top{}], system_monitor:function_top(), system_monitor:function_top()}.
-finalize_aggr_top(NProc) ->
+finalize_aggr_top(TS, NProc) ->
   %% Collect data:
   SampleSize = top_sample_size(),
   CurrFunTop = filter_nproc_results(?TOP_CURR_FUN, NProc, SampleSize),
   InitCallTop = filter_nproc_results(?TOP_INIT_CALL, NProc, SampleSize),
-  AppTop = filter_app_top(),
+  AppTop = filter_app_top(TS),
   %% Cleanup:
   ets:delete(?TOP_APP_TAB),
   ets:delete(?TOP_CURR_FUN),
   ets:delete(?TOP_INIT_CALL),
   {AppTop, InitCallTop, CurrFunTop}.
 
-filter_app_top() ->
+-spec filter_app_top(system_monitor_lib:ts()) -> [#app_top{}].
+filter_app_top(TS) ->
   L = ets:tab2list(?TOP_APP_TAB),
   TotalReds = lists:foldl( fun({_, _, Reds, _Mem}, Acc) ->
                                Reds + Acc
@@ -288,6 +286,7 @@ filter_app_top() ->
                          ),
   Factor = 1 / max(1, TotalReds),
   [#app_top{ app       = App
+           , ts        = TS
            , red_abs   = Reds
            , red_rel   = Reds * Factor
            , memory    = Mem
@@ -349,7 +348,7 @@ top_to_list(#top_acc{ vips    = VIPs
 %% Getting process info
 %%--------------------------------------------------------------------
 
--spec enrich(#delta{}, integer()) -> #erl_top{}.
+-spec enrich(#delta{}, system_monitor_lib:ts()) -> #erl_top{}.
 enrich(#delta{ pid      = Pid
              , reg_name = RegName
              , reds     = Reds

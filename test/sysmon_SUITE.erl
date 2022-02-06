@@ -30,10 +30,19 @@ all() ->
   [Fun || {Fun, 1} <- ?MODULE:module_info(exports), lists:prefix("t_", atom_to_list(Fun))].
 
 init_per_suite(Config) ->
+  snabbkaffe:fix_ct_logging(),
   application:load(?APP),
   application:set_env(?APP, vips, [some_random_name|vips()]),
   application:set_env(?APP, top_sample_interval, 1000),
   application:set_env(?APP, tick_interval, 100),
+  application:set_env(?APP, top_significance_threshold,
+                      #{ current_function => 0
+                       , initial_call     => 0
+                       , reductions       => 0
+                       , abs_reductions   => 0
+                       , memory           => 0
+                       , num_processes    => 1
+                       }),
   docker_cleanup(),
   ?assertMatch(0, docker_startup()),
   OldConf = application:get_all_env(?APP),
@@ -61,14 +70,6 @@ t_start(_) ->
   ?check_trace(
      #{timetrap => 30000},
      try
-       application:set_env(?APP, top_significance_threshold,
-                           #{ current_function => 0
-                            , initial_call     => 0
-                            , reductions       => 0
-                            , abs_reductions   => 0
-                            , memory           => 0
-                            , num_processes    => 1
-                            }),
        application:ensure_all_started(?APP),
        spawn_procs(100, 1000, 10000),
        %% Wait several events:
@@ -158,8 +159,12 @@ t_postgres(_) ->
        unlink(whereis(system_monitor_pg)),
        application:stop(?APP)
      end,
-     []).
-
+     [ fun ?MODULE:no_pg_query_failures/1
+     , fun ?MODULE:success_proc_top_queries/1
+     , fun ?MODULE:success_app_top_queries/1
+     , fun ?MODULE:success_fun_top_queries/1
+     , fun ?MODULE:success_node_status_queries/1
+     ]).
 
 t_builtin_checks(_) ->
   ?check_trace(
@@ -209,9 +214,30 @@ t_events(_) ->
 %% Trace specs
 %%================================================================================
 
+no_pg_query_failures(Trace) ->
+  ?assertMatch([], ?of_kind(system_monitor_pg_query_error, Trace)).
+
+success_proc_top_queries(Trace) ->
+  contains_type(proc_top, Trace).
+
+success_app_top_queries(Trace) ->
+  contains_type(app_top, Trace).
+
+success_fun_top_queries(Trace) ->
+  contains_type(initial_fun_top, Trace) andalso contains_type(current_fun_top, Trace).
+
+success_node_status_queries(Trace) ->
+  contains_type(node_status, Trace).
+
+contains_type(Type, Trace) ->
+  lists:search( ?match_event(#{?snk_kind := sysmon_produce, backend := pg, type := T}
+                             when T =:= Type)
+              , Trace
+              ) =/= false.
+
 check_produce_seal(Trace) ->
   ?assert(
-     ?strict_causality( #{?snk_kind := sysmon_produce, type := node_role}
+     ?strict_causality( #{?snk_kind := sysmon_produce, type := node_status}
                       , #{?snk_kind := sysmon_report_data}
                       , Trace
                       )).
@@ -256,7 +282,7 @@ docker_startup() ->
  -e SYSMON_PASS=system_monitor_password \\
  -e GRAFANA_PASS=system_monitor_password \\
  -e POSTGRES_PASSWORD=system_monitor_password \\
- ghcr.io/k32/sysmon-postgres:latest").
+ ghcr.io/k32/sysmon-postgres:1.0.0").
 
 docker_cleanup() ->
   exec("docker kill sysmondb"),

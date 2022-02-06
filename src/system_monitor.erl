@@ -176,7 +176,7 @@ handle_cast({report_data, SnapshotTS, ProcTop, AppTop, InitCallTop, CurrentFunTo
   ets:insert(?TABLE, {app_top,         SnapshotTS, AppTop}),
   ets:insert(?TABLE, {init_call_top,   SnapshotTS, InitCallTop}),
   ets:insert(?TABLE, {current_fun_top, SnapshotTS, CurrentFunTop}),
-  report_node_status(SnapshotTS, ProcTop),
+  report_node_status(SnapshotTS, ProcTop, AppTop),
   ?tp(sysmon_report_data, #{ts => SnapshotTS}),
   {noreply, State};
 handle_cast(reset, State) ->
@@ -191,7 +191,7 @@ handle_info({Self, tick}, State) when Self =:= self() ->
                     apply(Module, Function, [])
                   catch
                     EC:Error:Stack ->
-                      error_logger:warning_msg(
+                      logger:debug(
                         "system_monitor ~p crashed:~n~p:~p~nStacktrace: ~p~n",
                         [{Module, Function}, EC, Error, Stack])
                   end,
@@ -266,9 +266,10 @@ monitors() ->
   ?CFG(status_checks).
 
 %% @doc Report node status
-report_node_status(TS, ProcTop) ->
+report_node_status(TS, ProcTop, AppTop) ->
   system_monitor_callback:produce(proc_top, ProcTop),
-  report_app_top(TS),
+  system_monitor_callback:produce(app_top, AppTop),
+  produce_fun_top(TS),
   %% Node status report goes last, and it "seals" the report for this
   %% time interval:
   NodeReport =
@@ -283,8 +284,8 @@ report_node_status(TS, ProcTop) ->
       _ ->
         <<>>
     end,
-  system_monitor_callback:produce(node_role,
-                                  [{node_role, node(), TS, iolist_to_binary(NodeReport)}]).
+  system_monitor_callback:produce(node_status,
+                                  [{node_status, node(), TS, iolist_to_binary(NodeReport)}]).
 
 -spec get_filtered_top(proc_top | app_top | init_call_top | current_fun_top, byte(), byte(), atom()) ->
         [{atom(), number()}].
@@ -335,27 +336,19 @@ log_suspect_proc(Proc) ->
   Format = "Suspect Proc~n~s",
   ?LOG_WARNING(Format, [ErlTopStr], #{domain => [system_monitor]}).
 
--spec report_app_top(integer()) -> ok.
-report_app_top(TS) ->
-  AppReds  = get_abs_app_top(),
-  present_results(app_top, reductions, AppReds, TS),
-  AppMem   = get_app_memory(),
-  present_results(app_top, memory, AppMem, TS),
-  AppProcs = get_app_processes(),
-  present_results(app_top, processes, AppProcs, TS),
-  #{ current_function := CurrentFunction
-   , initial_call := InitialCall
+-spec produce_fun_top(system_monitor_lib:ts()) -> ok.
+produce_fun_top(TS) ->
+  #{ current_function := CurrentFunctionTop
+   , initial_call     := InitialCallTop
    } = get_function_top(),
-  present_results(fun_top, current_function, CurrentFunction, TS),
-  present_results(fun_top, initial_call, InitialCall, TS),
+  produce_fun_top(current_fun_top, CurrentFunctionTop, TS),
+  produce_fun_top(initial_fun_top, InitialCallTop, TS),
   ok.
 
-present_results(Record, Tag, Values, TS) ->
+produce_fun_top(TopType, Values, TS) ->
   Node = node(),
-  L = lists:filtermap(fun ({Key, Val}) ->
-                            {true, {Record, Node, TS, Key, Tag, Val}};
-                          (_) ->
-                            false
-                      end,
-                      Values),
-  system_monitor_callback:produce(Record, L).
+  L = lists:map(fun({Function, PercentProcesses}) ->
+                    {Node, TS, Function, PercentProcesses}
+                end,
+                Values),
+  system_monitor_callback:produce(TopType, L).
