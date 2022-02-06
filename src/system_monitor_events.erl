@@ -1,4 +1,5 @@
 %%--------------------------------------------------------------------------------
+%% Copyright 2022 k32
 %% Copyright 2020 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,8 +22,8 @@
 
 -behaviour(gen_server).
 
--include("system_monitor.hrl").
--include_lib("hut/include/hut.hrl").
+-include("sysmon_int.hrl").
+-include_lib("kernel/include/logger.hrl").
 
 -export([start_link/0]).
 
@@ -60,11 +61,10 @@ handle_cast(_Msg, State) ->
 handle_info({monitor, PidOrPort, EventKind, Info}, State) ->
   ReferenceData = data_for_reference(PidOrPort),
   InfoTxt = format_system_event_info(Info),
-  ?log( info
-      , "sysmon type=~p reference=~p~n~s~n~s"
-      , [EventKind, PidOrPort, InfoTxt, ReferenceData]
-      , #{domain => [system_monitor]}
-      ),
+  ?LOG_INFO( "sysmon type=~p reference=~p~n~s~n~s"
+           , [EventKind, PidOrPort, InfoTxt, ReferenceData]
+           , #{domain => [system_monitor]}
+           ),
   case application:get_env(?APP, external_monitoring) of
     {ok, Mod} -> Mod:system_monitor_event(EventKind, Info);
     undefined -> ok
@@ -90,10 +90,10 @@ setup_system_monitor() ->
   erlang:system_monitor(self(), Opts),
   ok.
 
-data_for_reference(Pid) when is_pid(Pid) ->
-  case system_monitor_top:get_proc_top(Pid) of
-    false -> "Proc not in top";
-    ProcErlTop -> system_monitor:erl_top_to_str(ProcErlTop)
+data_for_reference(Proc) when is_pid(Proc) orelse is_atom(Proc) ->
+  case system_monitor:get_proc_info(Proc) of
+    false      -> "Proc not in top";
+    ProcErlTop -> system_monitor_lib:erl_top_to_str(ProcErlTop)
   end;
 data_for_reference(_Port) ->
   "".

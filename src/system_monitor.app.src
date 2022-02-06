@@ -1,5 +1,6 @@
 %% -*- mode: erlang -*-
 %%--------------------------------------------------------------------------------
+%% Copyright 2022 k32
 %% Copyright 2020 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,7 +33,7 @@
       %% Specifies sample size for the approximate metrics, such as
       %% 'percentage of processes started by an app', and 'percentage
       %% of processes running a function':
-    , {top_sample_size, 3000}
+    , {top_sample_size, 1000}
       %% Stop reporting exact process data when the number of
       %% processes is above this threshold, in order to avoid
       %% hammering the VM with introspection BIFs (this doesn't affect
@@ -49,10 +50,13 @@
     , {top_significance_threshold,
        #{ current_function => 0.01 % 1 percent
         , initial_call     => 0.01 % 1 percent
-        , processes        => 100  % number of processes
         , reductions       => 0.01 % 1 percent
-        , memory           => 10000 % words
+        , memory           => 0.01 % 1 percent
+        , num_processes    => 100
         }}
+
+      %% List of registered processes that should be always reported:
+    , {vips, [mnesia_tm, mnesia_locker]}
 
       %% Specify node-specific healthcheck function as `{module(),
       %% function()}', for example: `{my_app, node_status}'. This

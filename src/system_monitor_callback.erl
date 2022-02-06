@@ -22,7 +22,7 @@
         , is_configured/0
         ]).
 
--include_lib("system_monitor/include/system_monitor.hrl").
+-include("sysmon_int.hrl").
 
 -callback start() -> ok.
 -callback stop() -> ok.
@@ -39,7 +39,7 @@ produce(Type, Events) ->
 
 -compile({inline, [get_callback_mod/0]}).
 get_callback_mod() ->
-  application:get_env(?APP, callback_mod, undefined).
+  application:get_env(?APP, callback_mod, system_monitor_dummy).
 
 is_configured() ->
-  get_callback_mod() =/= undefined.
+  get_callback_mod() =/= system_monitor_dummy.

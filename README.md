@@ -1,10 +1,6 @@
 # system_monitor
 > Erlang telemetry collector
 
-[![Build Status][ci-image]][ci-url]
-[![License][license-image]][license-url]
-[![Developed at Klarna][klarna-image]][klarna-url]
-
 `system_monitor` is a BEAM VM monitoring and introspection application
 that helps troubleshooting live systems. It collects various
 information about Erlang processes and applications.
@@ -92,7 +88,7 @@ More information about configurable options is found [here](src/system_monitor.a
 
 System_monitor will spawn several processes that handle different states:
 
-* `system_monitor_top`
+* `system_monitor_collector`
   Collects a certain amount of data from BEAM for a preconfigured number of processes
 * `system_monitor_events`
   Subscribes to certain types of preconfigured BEAM events such as: busy_port, long_gc, long_schedule etc
@@ -106,7 +102,7 @@ System_monitor will spawn several processes that handle different states:
 * `suspect_procs`
   Logs if it detects processes with suspiciously high memory
 * `report_full_status`
-  Gets the state from `system_monitor_top` and produces to a backend module
+  Gets the state from `system_monitor_collector` and produces to a backend module
   that implements the `system_monitor_callback` behavior, selected by binding
   `callback_mod` in the `system_monitor` application environment to that module.
   If `callback_mod` is unbound, this monitor is disabled.
@@ -114,22 +110,8 @@ System_monitor will spawn several processes that handle different states:
 
 `system_monitor_pg` allows for Postgres being temporary down by storing the stats in its own internal buffer.
 This buffer is built with a sliding window that will stop the state from growing too big whenever
-Postgres is down for too long. On top of this `system_monitor_pg` has a built-in load 
+Postgres is down for too long. On top of this `system_monitor_pg` has a built-in load
 shedding mechanism that protects itself once the message length queue grows bigger than a certain level.
-
-## Local development
-A Postgres and Grafana cluster can be spun up using `make dev-start` and stopped using `make dev-stop`.
-Start `system_monitor` by calling `rebar3 shell` and start the application with `application:ensure_all_started(system_monitor)`.
-
-At this point a grafana instance will be available on localhost:3000 with default login "admin" and password
-"admin" including some predefined dashboards.
-
-## Production setup
-For production, a similar Postgres has to be setup as is done in the Dockerfile for Postgres in case one chooses to go with a system_monitor -> Postgres setup.
-
-## How to contribute
-
-See our guide on [contributing](.github/CONTRIBUTING.md).
 
 ## Release History
 
@@ -138,14 +120,6 @@ See our [changelog](CHANGELOG.md).
 ## License
 
 Copyright © 2020 Klarna Bank AB
+Copyright © 2021-2022 k32
 
-For license details, see the [LICENSE](LICENSE) file in the root of this project.
-
-
-<!-- Markdown link & img dfn's -->
-[ci-image]: https://img.shields.io/badge/build-passing-brightgreen?style=flat-square
-[ci-url]: https://github.com/klarna-incubator/TODO
-[license-image]: https://img.shields.io/badge/license-Apache%202-blue?style=flat-square
-[license-url]: http://www.apache.org/licenses/LICENSE-2.0
-[klarna-image]: https://img.shields.io/badge/%20-Developed%20at%20Klarna-black?labelColor=ffb3c7&style=flat-square&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAOCAYAAAAmL5yKAAAAAXNSR0IArs4c6QAAAIRlWElmTU0AKgAAAAgABQESAAMAAAABAAEAAAEaAAUAAAABAAAASgEbAAUAAAABAAAAUgEoAAMAAAABAAIAAIdpAAQAAAABAAAAWgAAAAAAAALQAAAAAQAAAtAAAAABAAOgAQADAAAAAQABAACgAgAEAAAAAQAAABCgAwAEAAAAAQAAAA4AAAAA0LMKiwAAAAlwSFlzAABuugAAbroB1t6xFwAAAVlpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IlhNUCBDb3JlIDUuNC4wIj4KICAgPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4KICAgICAgPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIKICAgICAgICAgICAgeG1sbnM6dGlmZj0iaHR0cDovL25zLmFkb2JlLmNvbS90aWZmLzEuMC8iPgogICAgICAgICA8dGlmZjpPcmllbnRhdGlvbj4xPC90aWZmOk9yaWVudGF0aW9uPgogICAgICA8L3JkZjpEZXNjcmlwdGlvbj4KICAgPC9yZGY6UkRGPgo8L3g6eG1wbWV0YT4KTMInWQAAAVBJREFUKBVtkz0vREEUhsdXgo5qJXohkUgQ0fgFNFpR2V5ClP6CQu9PiB6lEL1I7B9A4/treZ47c252s97k2ffMmZkz5869m1JKL/AFbzAHaiRbmsIf4BdaMAZqMFsOXNxXkroKbxCPV5l8yHOJLVipn9/vEreLa7FguSN3S2ynA/ATeQuI8tTY6OOY34DQaQnq9mPCDtxoBwuRxPfAvPMWnARlB12KAi6eLTPruOOP4gcl33O6+Sjgc83DJkRH+h2MgorLzaPy68W48BG2S+xYnmAa1L+nOxEduMH3fgjGFvZeVkANZau68B6CrgJxWosFFpF7iG+h5wKZqwt42qIJtARu/ix+gqsosEq8D35o6R3c7OL4lAnTDljEe9B3Qa2BYzmHemDCt6Diwo6JY7E+A82OnN9HuoBruAQvUQ1nSxP4GVzBDRyBfygf6RW2/gD3NmEv+K/DZgAAAABJRU5ErkJggg==
-[klarna-url]: https://github.com/klarna-incubator
+For license details, see Klarna Bank ABthe [LICENSE](LICENSE) file in the root of this project.
