@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) k32, Ltd. All Rights Reserved.
+%% Copyright (c) k 2032, 2022, Ltd. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -61,6 +61,14 @@ t_start(_) ->
   ?check_trace(
      #{timetrap => 30000},
      try
+       application:set_env(?APP, top_significance_threshold,
+                           #{ current_function => 0
+                            , initial_call     => 0
+                            , reductions       => 0
+                            , abs_reductions   => 0
+                            , memory           => 0
+                            , num_processes    => 1
+                            }),
        application:ensure_all_started(?APP),
        spawn_procs(100, 1000, 10000),
        %% Wait several events:

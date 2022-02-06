@@ -104,23 +104,23 @@ get_proc_info(Pid) ->
 %% reductions
 -spec get_app_top() -> [{atom(), float()}].
 get_app_top() ->
-  do_get_app_top(#app_top.red_rel).
+  get_filtered_top(app_top, #app_top.app, #app_top.red_rel, reductions).
 
 %% @doc Get absolute reduction utilization per application, sorted by
 %% reductions
 -spec get_abs_app_top() -> [{atom(), integer()}].
 get_abs_app_top() ->
-  do_get_app_top(#app_top.red_abs).
+  get_filtered_top(app_top, #app_top.app, #app_top.red_abs, abs_reductions).
 
 %% @doc Get memory utilization per application, sorted by memory
 -spec get_app_memory() -> [{atom(), integer()}].
 get_app_memory() ->
-  do_get_app_top(#app_top.memory).
+  get_filtered_top(app_top, #app_top.app, #app_top.memory, memory).
 
 %% @doc Get number of processes spawned by each application
 -spec get_app_processes() -> [{atom(), integer()}].
 get_app_processes() ->
-  do_get_app_top(#app_top.processes).
+  get_filtered_top(app_top, #app_top.app, #app_top.processes, num_processes).
 
 %% @doc Get approximate distribution of initilal_call and
 %% current_function per process
@@ -128,8 +128,8 @@ get_app_processes() ->
                              , current_function := function_top()
                              }.
 get_function_top() ->
-  #{ initial_call     => lookup_top(init_call_top)
-   , current_function => lookup_top(current_fun_top)
+  #{ initial_call     => get_filtered_top(init_call_top, 1, 2, initial_call)
+   , current_function => get_filtered_top(current_fun_top, 1, 2, current_function)
    }.
 
 %%====================================================================
@@ -273,12 +273,25 @@ report_node_status(TS, ProcTop) ->
   system_monitor_callback:produce(node_role,
                                   [{node_role, node(), TS, iolist_to_binary(NodeReport)}]).
 
--spec do_get_app_top(integer()) -> [{atom(), number()}].
-do_get_app_top(FieldId) ->
-  Data = lookup_top(app_top),
-  lists:reverse(
-    lists:keysort(2, [{Val#app_top.app, element(FieldId, Val)}
-                      || Val <- Data])).
+-spec get_filtered_top(proc_top | app_top | init_call_top | current_fun_top, byte(), byte(), atom()) ->
+        [{atom(), number()}].
+get_filtered_top(Top, KeyField, ValueField, ThresholdKey) ->
+  Threshold = maps:get(ThresholdKey, ?CFG(top_significance_threshold), 0.0001),
+  lists:reverse(lists:keysort(2, lookup_top_kv(Top, KeyField, ValueField, Threshold))).
+
+-spec lookup_top_kv(proc_top | app_top | init_call_top | current_fun_top, byte(), byte(), number()) ->
+        [{atom(), number()}].
+lookup_top_kv(Top, KeyField, ValueField, Threshold) ->
+  lists:filtermap( fun(Record) ->
+                       Key = element(KeyField, Record),
+                       Val = element(ValueField, Record),
+                       case Val > Threshold of
+                         true  -> {true, {Key, Val}};
+                         false -> false
+                       end
+                   end
+                 , lookup_top(Top)
+                 ).
 
 -spec lookup_top(proc_top | app_top | init_call_top | current_fun_top) -> list().
 lookup_top(Key) ->

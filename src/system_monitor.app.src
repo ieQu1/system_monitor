@@ -41,11 +41,12 @@
       %% Don't report values to `app_top' and `fun_top' below the
       %% threshold as insignificant:
     , {top_significance_threshold,
-       #{ current_function => 0.01 % 1 percent
-        , initial_call     => 0.01 % 1 percent
-        , reductions       => 0.01 % 1 percent
-        , memory           => 0.01 % 1 percent
-        , num_processes    => 100
+       #{ current_function => 0.01 % 1 percent of all processes
+        , initial_call     => 0.01 % 1 percent of all processes
+        , reductions       => 0.01 % 1 percent of total reductions
+        , abs_reductions   => 100  % Absolute number of reductions
+        , memory           => 0.01 % 1 percent of total memory
+        , num_processes    => 100  % absolute number of processes
         }}
 
       %% List of registered processes that should be always reported:
