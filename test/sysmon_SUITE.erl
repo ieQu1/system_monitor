@@ -20,6 +20,7 @@
 
 -include("sysmon_int.hrl").
 -include_lib("snabbkaffe/include/snabbkaffe.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 %%================================================================================
 %% behavior callbacks
@@ -29,6 +30,8 @@ all() ->
   [Fun || {Fun, 1} <- ?MODULE:module_info(exports), lists:prefix("t_", atom_to_list(Fun))].
 
 init_per_suite(Config) ->
+  application:set_env(?APP, vips, [system_monitor_collector, system_monitor, some_random_name]),
+  application:set_env(?APP, top_sample_interval, 1000),
   Config.
 
 end_per_suite(_Config) ->
@@ -51,15 +54,66 @@ end_per_testcase(TestCase, Config) ->
 
 t_start(_) ->
   ?check_trace(
-     #{timetrap => 10000},
+     #{timetrap => 30000},
      try
        application:ensure_all_started(?APP),
-       ?block_until(#{?snk_kind := sysmon_report_data})
+       spawn_procs(100, 1000, 10000),
+       %% Wait several events:
+       [?block_until(#{?snk_kind := sysmon_report_data}, infinity, 0) || _ <- lists:seq(1, 10)]
      after
        application:stop(?APP)
      end,
-     []).
+     [fun check_dummy_callback/1]).
+
+t_too_many_procs(_) ->
+  ?check_trace(
+     #{timetrap => 30000},
+     try
+       application:set_env(?APP, top_max_procs, 1),
+       application:ensure_all_started(?APP),
+       ?block_until(#{?snk_kind := sysmon_report_data}, infinity, 0),
+       {_TS, Top} = system_monitor:get_proc_top(),
+       %% Check that "warning" process is there:
+       ?assertMatch( #erl_top{pid = "!!!", group_leader = "!!!", registered_name = too_many_processes}
+                   , lists:keyfind("!!!", #erl_top.pid, Top)
+                   ),
+       %% Check that the VIPs are still there:
+       ?assertMatch( #erl_top{}
+                   , lists:keyfind(system_monitor_collector, #erl_top.registered_name, Top)
+                   ),
+       ?assertMatch( #erl_top{}
+                   , lists:keyfind(system_monitor, #erl_top.registered_name, Top)
+                   )
+     after
+       application:stop(?APP)
+     end,
+     [ fun check_dummy_callback/1
+     ]).
+
+
+%%================================================================================
+%% Trace specs
+%%================================================================================
+
+check_dummy_callback(Trace) ->
+  ?assert(
+     ?strict_causality( #{?snk_kind := sysmon_dummy_produce, type := node_role}
+                      , #{?snk_kind := sysmon_report_data}
+                      , Trace
+                      )).
 
 %%================================================================================
 %% Internal functions
 %%================================================================================
+
+spawn_procs(N, MinSleep, MaxSleep) ->
+  Parent = self(),
+  lists:foreach( fun(_) ->
+                     erlang:spawn(?MODULE, idle_loop, [Parent, MinSleep, MaxSleep])
+                 end
+               , lists:seq(1, N)
+               ).
+
+idle_loop(Parent, MinSleep, MaxSleep) ->
+  timer:sleep(MinSleep + rand:uniform(MaxSleep - MinSleep)),
+  erlang:spawn(?MODULE, ?FUNCTION_NAME, [Parent, MinSleep, MaxSleep]).

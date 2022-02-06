@@ -39,12 +39,6 @@
       %% hammering the VM with introspection BIFs (this doesn't affect
       %% approximate monitors that rely on sampling):
     , {top_max_procs, 15000}
-      %% By default system_monitor tries to collect process dictionary
-      %% of the topmost processes in order to determine start function
-      %% more precisely. In theory this can cause problems if process
-      %% dictionary contains very large amounts of data. This option
-      %% allows to fallback to safety:
-    , {collect_process_dictionary, true}
       %% Don't report values to `app_top' and `fun_top' below the
       %% threshold as insignificant:
     , {top_significance_threshold,
