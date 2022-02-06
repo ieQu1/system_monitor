@@ -85,10 +85,9 @@ reset() ->
   gen_server:cast(?SERVER, reset).
 
 %% @doc Get Erlang process top
--spec get_proc_top() -> {integer(), [#erl_top{}]}.
+-spec get_proc_top() -> [#erl_top{}].
 get_proc_top() ->
-  [{_, TS, Top}] = ets:lookup(?TABLE, proc_top),
-  {TS, Top}.
+  lookup_top(proc_top).
 
 %% @doc Get Erlang process top info for one process
 -spec get_proc_info(pid() | atom()) -> #erl_top{} | false.
@@ -215,12 +214,11 @@ check_process_count() ->
   end.
 
 suspect_procs() ->
-  {_TS, ProcTop} = get_proc_top(),
-  Env = fun(Name) -> application:get_env(?APP, Name, undefined) end,
-  Conf =
-    {Env(suspect_procs_max_memory),
-     Env(suspect_procs_max_message_queue_len),
-     Env(suspect_procs_max_total_heap_size)},
+  ProcTop = get_proc_top(),
+  Conf = { ?CFG(suspect_procs_max_memory)
+         , ?CFG(suspect_procs_max_message_queue_len)
+         , ?CFG(suspect_procs_max_total_heap_size)
+         },
   SuspectProcs = lists:filter(fun(Proc) -> is_suspect_proc(Proc, Conf) end, ProcTop),
   lists:foreach(fun log_suspect_proc/1, SuspectProcs).
 

@@ -8,7 +8,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          sudo apt-get install pwgen
+          sudo apt-get install docker
       - name: Install Erlang/OTP
         run: |
           OTP_VERSION="24.1.7-1"

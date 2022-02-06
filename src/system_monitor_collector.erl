@@ -230,7 +230,10 @@ maybe_update_aggr_top(#delta{ pid    = Pid
       ok;
     [{current_function, CurrentFunction}, {group_leader, GL}|L] ->
       InitialCall = initial_call(L),
-      App = application_controller:get_application(GL),
+      App = case application_controller:get_application(GL) of
+              {ok, A}   -> A;
+              undefined -> undefined
+            end,
       ets:update_counter(?TOP_CURR_FUN, CurrentFunction, {2, 1}, {CurrentFunction, 0}),
       ets:update_counter(?TOP_INIT_CALL, InitialCall, {2, 1}, {InitialCall, 0}),
       ets:update_counter(?TOP_APP_TAB, App, [{2, 1}, {3, DReds}, {4, Memory}], {App, 0, 0, 0}),
@@ -413,7 +416,7 @@ initial_call(Info)  ->
 %%--------------------------------------------------------------------
 
 make_fake_proc(Now) ->
-  Infinity = 999999999,
+  Infinity = 99999999999,
   #erl_top{ node               = node()
           , ts                 = Now
           , pid                = "!!!"
