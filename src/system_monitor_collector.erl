@@ -24,7 +24,7 @@
 -include("sysmon_int.hrl").
 
 %% API
--export([start_link/0, timestamp/0, diceroll/1]).
+-export([start_link/0, timestamp/0, add_vip/1, remove_vip/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -78,6 +78,18 @@
 %%% API
 %%%===================================================================
 
+%% @doc Add a VIP
+-spec add_vip(atom() | [atom()]) -> ok.
+add_vip(RegName) when is_atom(RegName) ->
+  add_vip([RegName]);
+add_vip(RegNames) when is_list(RegNames) ->
+  gen_server:call(?SERVER, {add_vip, RegNames}).
+
+%% @doc Add a VIP
+-spec remove_vip(atom()) -> ok.
+remove_vip(RegName) ->
+  gen_server:call(?SERVER, {remove_vip, RegName}).
+
 -spec start_link() -> {ok, pid()} | ignore | {error, term()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -96,6 +108,12 @@ init([]) ->
              , last_ts     = timestamp()
              }}.
 
+handle_call({add_vip, RegNames}, _From, State) ->
+  application:set_env(?APP, vips, lists:usort(RegNames ++ ?CFG(vips))),
+  {reply, ok, State};
+handle_call({remove_vip, RegName}, _From, State) ->
+  application:set_env(?APP, vips, lists:delete(RegName, ?CFG(vips))),
+  {reply, ok, State};
 handle_call(_Msg, _From, State) ->
   {reply, {error, bad_call}, State}.
 

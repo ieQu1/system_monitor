@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright (c) k 2032, 2022, Ltd. All Rights Reserved.
+%% Copyright 2022 k32
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -114,6 +114,32 @@ t_too_many_procs(_) ->
      [ fun ?MODULE:check_produce_seal/1
      , fun ?MODULE:check_produce_vips/1
      ]).
+
+t_add_remove_vips(_) ->
+  ?check_trace(
+     #{timetrap => 30000},
+     try
+       application:set_env(?APP, top_max_procs, 1),
+       application:ensure_all_started(?APP),
+       ?wait_async_action( begin
+                             system_monitor:add_vip(global_name_server),
+                             system_monitor:remove_vip(system_monitor)
+                           end
+                         , #{?snk_kind := sysmon_report_data}
+                         ),
+       Top = system_monitor:get_proc_top(),
+       %% Check that "warning" process is there:
+       ?assertMatch( #erl_top{pid = "!!!", group_leader = "!!!", registered_name = too_many_processes}
+                   , lists:keyfind("!!!", #erl_top.pid, Top)
+                   ),
+       %% Check the VIPs:
+       ?assertMatch(false, system_monitor:get_proc_info(system_monitor)),
+       ?assertMatch(#erl_top{}, system_monitor:get_proc_info(application_controller)),
+       ?assertMatch(#erl_top{}, system_monitor:get_proc_info(global_name_server))
+     after
+       application:stop(?APP)
+     end,
+     []).
 
 t_postgres(_) ->
   ?check_trace(

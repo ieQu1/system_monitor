@@ -39,6 +39,9 @@
         , get_function_top/0
         , get_proc_top/0
         , get_proc_info/1
+
+        , add_vip/1
+        , remove_vip/1
         ]).
 
 %% Builtin checks
@@ -83,6 +86,16 @@ start_link() -> gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
 -spec reset() -> ok.
 reset() ->
   gen_server:cast(?SERVER, reset).
+
+%% @doc Add a VIP
+-spec add_vip(atom() | [atom()]) -> ok.
+add_vip(NameOrNames) ->
+  system_monitor_collector:add_vip(NameOrNames).
+
+%% @doc Add a VIP
+-spec remove_vip(atom()) -> ok.
+remove_vip(RegName) ->
+  system_monitor_collector:remove_vip(RegName).
 
 %% @doc Get Erlang process top
 -spec get_proc_top() -> [#erl_top{}].
