@@ -34,10 +34,13 @@ init_per_suite(Config) ->
   application:set_env(?APP, vips, [some_random_name|vips()]),
   application:set_env(?APP, top_sample_interval, 1000),
   application:set_env(?APP, tick_interval, 100),
+  docker_cleanup(),
+  ?assertMatch(0, docker_startup()),
   OldConf = application:get_all_env(?APP),
   [{old_conf, OldConf} | Config].
 
 end_per_suite(_Config) ->
+  docker_cleanup(),
   ok.
 
 init_per_testcase(TestCase, Config) ->
@@ -62,10 +65,16 @@ t_start(_) ->
        spawn_procs(100, 1000, 10000),
        %% Wait several events:
        [?block_until(#{?snk_kind := sysmon_report_data}, infinity, 0) || _ <- lists:seq(1, 10)],
-       ?assertMatch([{_, _}|_], system_monitor:get_app_top()),
-       ?assertMatch([{_, _}|_], system_monitor:get_abs_app_top()),
-       ?assertMatch([{_, _}|_], system_monitor:get_app_memory()),
-       ?assertMatch([{_, _}|_], system_monitor:get_app_processes())
+       ?assertMatch([{App, N}|_] when is_atom(App) andalso is_number(N), system_monitor:get_app_top()),
+       ?assertMatch([{App, N}|_] when is_atom(App) andalso is_number(N), system_monitor:get_abs_app_top()),
+       ?assertMatch([{App, N}|_] when is_atom(App) andalso is_number(N), system_monitor:get_app_memory()),
+       ?assertMatch([{App, N}|_] when is_atom(App) andalso is_number(N), system_monitor:get_app_processes()),
+       ?assertMatch( #{ initial_call     := [{{M1, F1, A1}, V1}|_]
+                      , current_function := [{{M2, F2, A2}, V2}|_]
+                      } when is_atom(M1) andalso is_atom(M2) andalso is_atom(F1) andalso is_atom(F2) andalso
+                             is_number(A1) andalso is_number(A2) andalso is_number(V1) andalso is_number(V2)
+                   , system_monitor:get_function_top()
+                   )
      after
        application:stop(?APP)
      end,
@@ -80,7 +89,7 @@ t_too_many_procs(_) ->
        application:set_env(?APP, top_max_procs, 1),
        application:ensure_all_started(?APP),
        ?block_until(#{?snk_kind := sysmon_report_data}),
-       {_TS, Top} = system_monitor:get_proc_top(),
+       Top = system_monitor:get_proc_top(),
        %% Check that "warning" process is there:
        ?assertMatch( #erl_top{pid = "!!!", group_leader = "!!!", registered_name = too_many_processes}
                    , lists:keyfind("!!!", #erl_top.pid, Top)
@@ -98,6 +107,26 @@ t_too_many_procs(_) ->
      , fun ?MODULE:check_produce_vips/1
      ]).
 
+t_postgres(_) ->
+  ?check_trace(
+     #{timetrap => 30000},
+     try
+       application:set_env(?APP, top_max_procs, 1),
+       application:set_env(?APP, db_name, "postgres"),
+       application:set_env(?APP, callback_mod, system_monitor_pg),
+       application:ensure_all_started(?APP),
+       link(whereis(system_monitor_pg)), % if it crashes we will know
+       {ok, _} = ?block_until(#{?snk_kind := sysmon_produce, backend := pg, type := proc_top,
+                                msg := Msg} when Msg#erl_top.registered_name =:= too_many_processes),
+       {ok, _} = ?block_until(#{?snk_kind := sysmon_produce, backend := pg, type := proc_top,
+                                msg := Msg} when Msg#erl_top.registered_name =:= system_monitor)
+     after
+       unlink(whereis(system_monitor_pg)),
+       application:stop(?APP)
+     end,
+     []).
+
+
 t_builtin_checks(_) ->
   ?check_trace(
      #{timetrap => 30000},
@@ -107,7 +136,14 @@ t_builtin_checks(_) ->
        application:set_env(?APP, top_max_procs, NProc * 2),
        application:set_env(?APP, node_status_fun, {?MODULE, node_status}),
        application:ensure_all_started(?APP),
-       ?block_until(#{?snk_kind := "Abnormal process count"})
+       ?block_until(#{?snk_kind := "Abnormal process count"}),
+       %% Now insert a failing status check, to verify that it doesn't
+       %% affect the others:
+       FailingCheck = {?MODULE, failing_check, false, 1},
+       application:set_env(?APP, status_checks, [FailingCheck|?CFG(status_checks)]),
+       system_monitor:reset(),
+       ?block_until(#{?snk_kind := sysmon_failing_check_run}, infinity, 0),
+       ?block_until(#{?snk_kind := "Abnormal process count"}, infinity, 0)
      after
        application:stop(?APP)
      end,
@@ -159,6 +195,10 @@ check_produce_vips(Trace) ->
 %% Internal functions
 %%================================================================================
 
+failing_check() ->
+  ?tp(sysmon_failing_check_run, #{}),
+  error(deliberate).
+
 spawn_procs(N, MinSleep, MaxSleep) ->
   Parent = self(),
   lists:foreach( fun(_) ->
@@ -176,3 +216,35 @@ vips() ->
 
 node_status() ->
   "<b>this is my status</b>".
+
+docker_startup() ->
+  exec("docker run -d --name sysmondb -p 5432:5432 \\
+ -e SYSMON_PASS=system_monitor_password \\
+ -e GRAFANA_PASS=system_monitor_password \\
+ -e POSTGRES_PASSWORD=system_monitor_password \\
+ ghcr.io/k32/sysmon-postgres:latest").
+
+docker_cleanup() ->
+  exec("docker kill sysmondb"),
+  exec("docker rm -f sysmondb").
+
+-spec exec(file:filename()) -> integer().
+exec(CMD) ->
+  Port = open_port( {spawn, CMD}
+                  , [ exit_status
+                    , binary
+                    , stderr_to_stdout
+                    , {line, 300}
+                    ]
+                  ),
+  collect_port_output(Port).
+
+-spec collect_port_output(port()) -> integer().
+collect_port_output(Port) ->
+  receive
+    {Port, {data, {_, Data}}} ->
+      io:format(user, "docker: ~s~n", [Data]),
+      collect_port_output(Port);
+    {Port, {exit_status, ExitStatus}} ->
+      ExitStatus
+  end.

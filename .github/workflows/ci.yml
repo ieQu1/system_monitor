@@ -6,9 +6,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get install pwgen
+      - name: setup-docker
+        uses: docker-practice/actions-setup-docker@1.0.8
+
       - name: Install Erlang/OTP
         run: |
           OTP_VERSION="24.1.7-1"

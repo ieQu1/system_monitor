@@ -16,8 +16,7 @@
 %% limitations under the License.
 %%--------------------------------------------------------------------------------
 {application, system_monitor,
- [ {description,  "Monitoring app that exports Erlang VM introspection data to any backend. "
-                  "Defaults to Postgres"}
+ [ {description,  "Monitoring app that exports Erlang VM introspection data to the external databases."}
  , {licenses,     ["Apache 2.0"]}
  , {vsn,          "git"}
  , {registered,   []}
@@ -52,6 +51,16 @@
       %% List of registered processes that should be always reported:
     , {vips, [mnesia_tm, mnesia_locker]}
 
+      %% Data reporting callback. It is called whenever the data is collected.
+    , {callback_mod, system_monitor_dummy}
+      %% Postgres callback settings:
+    , {db_hostname, "localhost"}
+    , {db_port, 5432}
+    , {db_username, "system_monitor"}
+    , {db_password, "system_monitor_password"}
+    , {db_name, "system_monitor"}
+    , {db_connection_timeout, 5000}
+
       %% Specify node-specific healthcheck function as `{module(),
       %% function()}', for example: `{my_app, node_status}'. This
       %% function should return an HTML-formatted status report:
@@ -70,6 +79,7 @@
        , {long_gc, 500}
        , {long_schedule, 500}
        ]}
+      %% Suspect process settings:
     , {suspect_procs_max_memory, 524288000} %% 500 MB
     , {suspect_procs_max_message_queue_len, 5000}
     , {suspect_procs_max_total_heap_size, 524288000} %% 500 MB

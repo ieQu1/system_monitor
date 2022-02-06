@@ -54,6 +54,7 @@ start_link() ->
 
 init(_Args) ->
   erlang:process_flag(trap_exit, true),
+  logger:update_process_metadata(#{domain => [system_monitor, pg]}),
   {ok, #{}, {continue, start_pg}}.
 
 handle_continue(start_pg, State) ->
@@ -98,9 +99,13 @@ handle_cast({produce, Type, Events}, #{connection := Conn, buffer := Buffer} = S
     _ ->
       lists:foreach(fun({Type0, Events0}) ->
                       lists:foreach(fun(Event) ->
-                                      {ok, _} = epgsql:equery(Conn,
-                                                              query(Type0),
-                                                              params(Type0, Event))
+                                        {ok, _} = epgsql:equery(Conn,
+                                                                query(Type0),
+                                                                params(Type0, Event)),
+                                        ?tp(sysmon_produce, #{ type    => Type
+                                                             , msg     => Event
+                                                             , backend => pg
+                                                             })
                                     end, Events0)
                     end, buffer_to_list(buffer_add(Buffer, {Type, Events}))),
       {noreply, State#{buffer => buffer_new()}}
@@ -134,7 +139,6 @@ buffer_to_list({_, Buffer}) ->
 initialize() ->
   case connect() of
     undefined ->
-      log_failed_connection(),
       undefined;
     Conn ->
       mk_partitions(Conn),
@@ -145,21 +149,19 @@ connect() ->
   case epgsql:connect(connect_options()) of
     {ok, Conn} ->
       Conn;
-    _ ->
+    Err ->
+      ?LOG_WARNING("Failed to open connection to the DB: ~p", [Err]),
       undefined
   end.
 
 connect_options() ->
-  #{host => application:get_env(?APP, db_hostname, "localhost"),
-    port => application:get_env(?APP, db_port, 5432),
-    username => application:get_env(?APP, db_username, "system_monitor"),
-    password => application:get_env(?APP, db_password, "system_monitor_password"),
-    database => application:get_env(?APP, db_name, "system_monitor"),
-    timeout => application:get_env(?APP, db_connection_timeout, 5000),
+  #{host => ?CFG(db_hostname),
+    port => ?CFG(db_port),
+    username => ?CFG(db_username),
+    password => ?CFG(db_password),
+    database => ?CFG(db_name),
+    timeout => ?CFG(db_connection_timeout),
     codecs => []}.
-
-log_failed_connection() ->
-  ?LOG_WARNING("Failed to open connection to the DB.", [], #{domain => [system_monitor]}).
 
 mk_partitions(Conn) ->
   DaysAhead = application:get_env(system_monitor, partition_days_ahead, 10),
@@ -230,15 +232,15 @@ node_role_query() ->
   <<"insert into node_role (node, ts, data) VALUES ($1, $2, $3);">>.
 
 params(fun_top, {fun_top, Node, TS, Key, Tag, Val} = _Event) ->
-  [atom_to_list(Node), TS, system_monitor_lib:fmt_mfa(Key), Tag, Val];
+  [atom_to_list(Node), ts_to_timestamp(TS), system_monitor_lib:fmt_mfa(Key), Tag, Val];
 params(app_top, {app_top, Node, TS, Application, Tag, Val} = _Event) ->
   [atom_to_list(Node),
-   TS,
+   ts_to_timestamp(TS),
    atom_to_list(Application),
    atom_to_list(Tag),
    Val];
 params(node_role, {node_role, Node, TS, Bin}) ->
-  [atom_to_list(Node), TS, Bin];
+  [atom_to_list(Node), ts_to_timestamp(TS), Bin];
 params(proc_top,
        #erl_top{node = Node,
                 ts = TS,
@@ -258,7 +260,7 @@ params(proc_top,
                 group_leader = GL} =
          _Event) ->
   [atom_to_list(Node),
-   TS,
+   ts_to_timestamp(TS),
    Pid,
    DR,
    DM,
@@ -273,6 +275,9 @@ params(proc_top,
    THS,
    system_monitor_lib:fmt_stack(CS),
    GL].
+
+ts_to_timestamp(TS) ->
+  calendar:system_time_to_universal_time(TS, microsecond).
 
 name_to_list(Term) ->
   case io_lib:printable_latin1_list(Term) of
