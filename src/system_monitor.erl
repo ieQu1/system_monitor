@@ -64,7 +64,6 @@
 -include_lib("kernel/include/logger.hrl").
 
 -define(SERVER, ?MODULE).
--define(TICK_INTERVAL, 1000).
 -define(TABLE, system_monitor_data_tab).
 
 -type function_top() :: [{mfa(), number()}].
@@ -139,23 +138,22 @@ get_function_top() ->
 %%====================================================================
 
 init([]) ->
+  process_flag(trap_exit, true),
+  logger:update_process_metadata(#{domain => [system_monitor, status_check]}),
   ets:new(?TABLE, [ public
                   , named_table
                   , set
                   , {keypos, 1}
                   , {write_concurrency, false}
                   ]),
-  {ok, Timer} = timer:send_interval(?TICK_INTERVAL, {self(), tick}),
+  {ok, Timer} = timer:send_interval(?CFG(tick_interval), {self(), tick}),
   State = #state{ monitors  = init_monitors()
                 , timer_ref = Timer
                 },
   {ok, State, {continue, start_callback}}.
 
 handle_continue(start_callback, State) ->
-  case system_monitor_callback:is_configured() of
-    true -> ok = system_monitor_callback:start();
-    false -> ok
-  end,
+  ok = system_monitor_callback:start(),
   {noreply, State}.
 
 handle_call(_Request, _From, State) ->
@@ -211,11 +209,9 @@ check_process_count() ->
   {ok, MaxProcs} = application:get_env(?APP, top_max_procs),
   case erlang:system_info(process_count) of
     Count when Count > MaxProcs div 5 ->
-      ?LOG_WARNING( "Abnormal process count (~p).~n"
-                  , [Count]
-                  , #{domain => [system_monitor]}
-                  );
-    _ -> ok
+      ?tp(warning, "Abnormal process count", #{n_procs => Count});
+    _ ->
+      ok
   end.
 
 suspect_procs() ->
@@ -247,7 +243,7 @@ init_monitors() ->
 
 %% @doc Returns the list of monitors. The format is
 %%
-%% ```{FunctionName, RunMonitorAtTerminate, NumberOfTicks}'''
+%% ```{Module, FunctionName, RunAtTerminate, NumberOfTicks}'''
 %%
 %% `RunMonitorAtTerminate' determines whether the monitor is to be run
 %% in the terminate gen_server callback.  ... and `NumberOfTicks' is
