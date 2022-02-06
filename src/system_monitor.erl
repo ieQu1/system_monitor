@@ -287,6 +287,8 @@ lookup_top(Key) ->
     []                        -> []
   end.
 
+is_suspect_proc(#erl_top{pid = "!!!"}, _) ->
+  false;
 is_suspect_proc(Proc, {MaxMemory, MaxMqLen, MaxTotalHeapSize}) ->
   #erl_top{memory = Memory,
            message_queue_len = MessageQueueLen,
