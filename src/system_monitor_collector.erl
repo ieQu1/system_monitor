@@ -24,7 +24,7 @@
 -include("sysmon_int.hrl").
 
 %% API
--export([start_link/0, timestamp/0]).
+-export([start_link/0, timestamp/0, add_vip/1, remove_vip/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
@@ -78,6 +78,18 @@
 %%% API
 %%%===================================================================
 
+%% @doc Add a VIP
+-spec add_vip(atom() | [atom()]) -> ok.
+add_vip(RegName) when is_atom(RegName) ->
+  add_vip([RegName]);
+add_vip(RegNames) when is_list(RegNames) ->
+  gen_server:call(?SERVER, {add_vip, RegNames}).
+
+%% @doc Add a VIP
+-spec remove_vip(atom()) -> ok.
+remove_vip(RegName) ->
+  gen_server:call(?SERVER, {remove_vip, RegName}).
+
 -spec start_link() -> {ok, pid()} | ignore | {error, term()}.
 start_link() ->
   gen_server:start_link({local, ?SERVER}, ?MODULE, [], []).
@@ -96,6 +108,12 @@ init([]) ->
              , last_ts     = timestamp()
              }}.
 
+handle_call({add_vip, RegNames}, _From, State) ->
+  application:set_env(?APP, vips, lists:usort(RegNames ++ ?CFG(vips))),
+  {reply, ok, State};
+handle_call({remove_vip, RegName}, _From, State) ->
+  application:set_env(?APP, vips, lists:delete(RegName, ?CFG(vips))),
+  {reply, ok, State};
 handle_call(_Msg, _From, State) ->
   {reply, {error, bad_call}, State}.
 
@@ -249,47 +267,37 @@ init_tables() ->
 -spec finalize_aggr_top(non_neg_integer()) ->
         {[#app_top{}], system_monitor:function_top(), system_monitor:function_top()}.
 finalize_aggr_top(NProc) ->
-  #{ current_function := CurrFunThreshold
-   , initial_call     := InitialCallThreshold
-   , reductions       := ReductionsThreshold
-   , memory           := MemThreshold
-   , num_processes    := NProcCutoff
-   } = ?CFG(top_significance_threshold),
   %% Collect data:
   SampleSize = top_sample_size(),
-  CurrFunTop = filter_nproc_results(?TOP_CURR_FUN, CurrFunThreshold, NProc, SampleSize),
-  InitCallTop = filter_nproc_results(?TOP_INIT_CALL, InitialCallThreshold, NProc, SampleSize),
-  AppTop = filter_app_top(NProcCutoff, ReductionsThreshold, MemThreshold),
+  CurrFunTop = filter_nproc_results(?TOP_CURR_FUN, NProc, SampleSize),
+  InitCallTop = filter_nproc_results(?TOP_INIT_CALL, NProc, SampleSize),
+  AppTop = filter_app_top(),
   %% Cleanup:
   ets:delete(?TOP_APP_TAB),
   ets:delete(?TOP_CURR_FUN),
   ets:delete(?TOP_INIT_CALL),
   {AppTop, InitCallTop, CurrFunTop}.
 
-filter_app_top(NProcCutoff, ReductionsThreshold, MemThreshold) ->
+filter_app_top() ->
   L = ets:tab2list(?TOP_APP_TAB),
-  {TotalReds, TotalMem} = lists:foldl( fun({_, _, Reds, Mem}, {R, M}) ->
-                                           {Reds + R, Mem + M}
-                                       end
-                                     , {0, 0}
-                                     , L
-                                     ),
+  TotalReds = lists:foldl( fun({_, _, Reds, _Mem}, Acc) ->
+                               Reds + Acc
+                           end
+                         , 0
+                         , L
+                         ),
   Factor = 1 / max(1, TotalReds),
-  RedCutoff = ReductionsThreshold * TotalReds,
-  MemCutoff = MemThreshold * TotalMem,
   [#app_top{ app       = App
            , red_abs   = Reds
            , red_rel   = Reds * Factor
            , memory    = Mem
            , processes = Procs
            }
-   || {App, Procs, Reds, Mem} <- L,
-      Reds > RedCutoff orelse Mem > MemCutoff orelse Procs > NProcCutoff].
+   || {App, Procs, Reds, Mem} <- L].
 
-filter_nproc_results(Tab, Threshold, NProc, SampleSize) ->
-  Cutoff = Threshold * SampleSize,
+filter_nproc_results(Tab, NProc, SampleSize) ->
   Factor = 1 / min(NProc, SampleSize),
-  [{K, V * Factor} || {K, V} <- ets:tab2list(Tab), V > Cutoff].
+  [{K, V * Factor} || {K, V} <- ets:tab2list(Tab)].
 
 %%--------------------------------------------------------------------
 %% Top accumulator manipulation
@@ -442,9 +450,8 @@ top_sample_size() ->
   ?CFG(top_sample_size).
 
 diceroll(Mod) ->
-  Cnt = get(?COUNT),
-  put(?COUNT, Cnt + 1),
-  (Cnt rem Mod) =:= 0.
+  Cnt = get(?COUNT) + 1,
+  put(?COUNT, Cnt rem Mod) =:= 0.
 
 ensure_list(Pid) when is_pid(Pid) ->
   pid_to_list(Pid);
