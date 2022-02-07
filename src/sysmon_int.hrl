@@ -23,4 +23,6 @@
 
 -define(CFG(KEY), system_monitor_lib:cfg(KEY)).
 
+-define(TS_UNIT, microsecond).
+
 -endif.

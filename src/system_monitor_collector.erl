@@ -132,7 +132,7 @@ handle_info(collect_data, State0) ->
   system_monitor:report_data(T1, {ProcTop, AppTop, InitCallTop, CurrFunTop}),
   %% Prepare for the next iteration:
   T2 = system_monitor_lib:timestamp(),
-  LastRunTime = T2 - T1,
+  LastRunTime = erlang:convert_time_unit(T2 - T1, ?TS_UNIT, millisecond),
   SleepTime = max(500, sample_interval() - LastRunTime),
   erlang:garbage_collect(self()),
   {ok, TRef} = timer:send_after(SleepTime, collect_data),

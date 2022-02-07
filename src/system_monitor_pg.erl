@@ -306,7 +306,7 @@ params(proc_top,
    GL].
 
 ts_to_timestamp(TS) ->
-  calendar:system_time_to_universal_time(TS, microsecond).
+  calendar:system_time_to_universal_time(TS, ?TS_UNIT).
 
 name_to_list(Term) ->
   case io_lib:printable_latin1_list(Term) of
