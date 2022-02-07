@@ -374,8 +374,7 @@ enrich(#delta{ pid      = Pid
       CurrentStack = [],
       CurrentFunction = undefined
   end,
-  #erl_top{ node               = node()
-          , ts                 = Now
+  #erl_top{ ts                 = Now
           , pid                = pid_to_list(Pid)
           , group_leader       = ensure_list(GL)
           , dreductions        = DReds
@@ -424,8 +423,7 @@ initial_call(Info)  ->
 
 make_fake_proc(Now) ->
   Infinity = 99999999999,
-  #erl_top{ node               = node()
-          , ts                 = Now
+  #erl_top{ ts                 = Now
           , pid                = "!!!"
           , group_leader       = "!!!"
           , dreductions        = Infinity

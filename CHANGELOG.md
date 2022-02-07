@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Optimized top collection for systems with millions of processes.
 Added "very important processes" feature: some registered processes
 are always collected to the top. Added CI and improved test suite.
-Major refactoring.
+Major refactoring. Hard fork from the [Klarna version](https://github.com/klarna-incubator/system_monitor).
 
 Warning: the table schema has changed! See: [example schema](https://github.com/k32/grafana-dashboards/blob/master/postgres/20-schema.sql)
 

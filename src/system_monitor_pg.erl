@@ -271,8 +271,7 @@ params(app_top,
 params(node_status, {node_status, Node, TS, Bin}) ->
   [atom_to_list(Node), ts_to_timestamp(TS), Bin];
 params(proc_top,
-       #erl_top{node = Node,
-                ts = TS,
+       #erl_top{ts = TS,
                 pid = Pid,
                 dreductions = DR,
                 dmemory = DM,
@@ -288,7 +287,7 @@ params(proc_top,
                 current_stacktrace = CS,
                 group_leader = GL} =
          _Event) ->
-  [atom_to_list(Node),
+  [atom_to_binary(node(), latin1),
    ts_to_timestamp(TS),
    Pid,
    DR,
