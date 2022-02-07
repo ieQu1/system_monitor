@@ -18,8 +18,7 @@
 -define(SYSTEM_MONITOR_HRL, true).
 
 -record(erl_top,
-        { node                :: node()
-        , ts                  :: system_monitor_lib:ts()
+        { ts                  :: system_monitor_lib:ts()
         , pid                 :: string()
         , dreductions         :: integer()
         , dmemory             :: integer()
