@@ -116,7 +116,7 @@ erl_top_to_str(Proc) ->
 
 -spec timestamp() -> ts().
 timestamp() ->
-  erlang:system_time(microsecond).
+  erlang:system_time(?TS_UNIT).
 
 %%================================================================================
 %% Internal functions
