@@ -53,7 +53,7 @@ to the release apps. Add the following lines to `rebar.config`:
 
 ```erlang
 {deps,
- [ {system_monitor, {git, "https://github.com/k32/system_monitor", {tag, "3.0.1}}}
+ [ {system_monitor, {git, "https://github.com/k32/system_monitor", {tag, "3.0.2"}}}
  ]}.
 
 {relx,
@@ -67,7 +67,7 @@ Or to `mix.exs` for Elixir:
 ```elixir
 defp deps() do
     [
-        {:system_monitor, github: "k32/system_monitor", tag: "3.0.1"}
+        {:system_monitor, github: "k32/system_monitor", tag: "3.0.2"}
     ]
 end
 ```

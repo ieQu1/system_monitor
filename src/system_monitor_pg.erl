@@ -25,6 +25,8 @@
         , handle_cast/2
         , format_status/2
         , terminate/2
+
+        , connect_options/0
         ]).
 
 -behaviour(system_monitor_callback).
@@ -66,7 +68,7 @@ handle_continue(start_pg, State) ->
       ok
   end,
   timer:send_after(?ONE_HOUR, mk_partitions),
-  {noreply, State#{connection => Conn, buffer => buffer_new()}}.
+  {noreply, State#{connection => Conn}}.
 
 handle_call(_Msg, _From, State) ->
   {reply, ok, State}.
@@ -89,61 +91,52 @@ handle_info(mk_partitions, #{connection := Conn} = State) ->
 handle_info(reinitialize, State) ->
   {noreply, State#{connection => initialize()}}.
 
-handle_cast({produce, Type, Events}, #{connection := undefined, buffer := Buffer} = State) ->
-  {noreply, State#{buffer => buffer_add(Buffer, {Type, Events})}};
-handle_cast({produce, Type, Events}, #{connection := Conn, buffer := Buffer} = State) ->
+handle_cast({produce, _Type, _Events}, #{connection := undefined} = State) ->
+  {noreply, State};
+handle_cast({produce, Type, Events}, #{connection := Conn} = State) ->
   MaxMsgQueueSize = application:get_env(?APP, max_message_queue_len, 1000),
   case process_info(self(), message_queue_len) of
     {_, N} when N > MaxMsgQueueSize ->
-      {noreply, State};
+      ignore;
     _ ->
-      lists:foreach(fun({Type0, Events0}) ->
-                        lists:foreach(fun(Event) -> run_query(Conn, Type0, Event) end, Events0)
-                    end, buffer_to_list(buffer_add(Buffer, {Type, Events}))),
-      {noreply, State#{buffer => buffer_new()}}
-  end.
+      run_query(Conn, Type, Events)
+  end,
+  {noreply, State}.
 
 format_status(normal, [_PDict, State]) ->
   [{data, [{"State", State}]}];
 format_status(terminate, [_PDict, State]) ->
-  State#{buffer => buffer_new()}.
+  State.
 
 terminate(_Reason, #{connection := undefined}) ->
   ok;
 terminate(_Reason, #{connection := Conn}) ->
   epgsql:close(Conn).
 
-%%%_* Internal buffer functions ===============================================
-buffer_new() ->
-  {0, queue:new()}.
-
-buffer_add({Len, Buffer}, Element) ->
-  MaxBufferSize = application:get_env(?APP, max_buffer_size, 1000),
-  case Len >= MaxBufferSize of
-    true -> {Len, queue:in(Element, queue:drop(Buffer))};
-    false -> {Len + 1, queue:in(Element, Buffer)}
-  end.
-
-buffer_to_list({_, Buffer}) ->
-  queue:to_list(Buffer).
-
 %%%_* Internal functions ======================================================
 
-run_query(Conn, Type, Event) ->
-  case epgsql:equery(Conn,
-                     query(Type),
-                     params(Type, Event)) of
-    {ok, _} ->
-      ?tp(sysmon_produce, #{ type    => Type
-                           , msg     => Event
-                           , backend => pg
-                           });
-    Err ->
+run_query(Conn, Type, Events) ->
+  {ok, Statement} = epgsql:parse(Conn, query(Type)),
+  Batch   = [{Statement, params(Type, I)} || I <- Events],
+  Results = epgsql:execute_batch(Conn, Batch),
+  emit_traces(Type, Events, Results).
+
+emit_traces(_Type, [], []) ->
+  ok;
+emit_traces(Type, [_Evt|Evts], [Result|Results]) ->
+  case Result of
+    {error, Err} ->
       ?tp(debug, system_monitor_pg_query_error,
           #{ query => Type
            , error => Err
-           })
-  end.
+           });
+    _Ok ->
+      ?tp(sysmon_produce, #{ type    => Type
+                           , msg     => _Evt
+                           , backend => pg
+                           })
+  end,
+  emit_traces(Type, Evts, Results).
 
 initialize() ->
   case connect() of
