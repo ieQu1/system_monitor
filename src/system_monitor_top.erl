@@ -54,9 +54,10 @@ empty(MaxItems) ->
 to_list(#top{data = Data}) ->
   lists:append(gb_trees:values(Data)).
 
--spec push(integer(), tuple(), top()) -> top().
+-spec push(integer(), tuple(), top()) -> {Changed, top()}
+          when Changed :: boolean().
 push(_, _, Top = #top{max_size = 0}) ->
-  Top;
+  {false, Top};
 push(FieldID, Val, #top{ size     = Size
                        , max_size = MaxSize
                        , data     = Data0
@@ -64,11 +65,11 @@ push(FieldID, Val, #top{ size     = Size
   Key      = element(FieldID, Val),
   Data     = gb_insert(Key, Val, Data0),
   {Min, _} = gb_trees:smallest(Data),
-  #top{ size     = Size + 1
-      , max_size = MaxSize
-      , minimum  = Min
-      , data     = Data
-      };
+  {true, #top{ size     = Size + 1
+             , max_size = MaxSize
+             , minimum  = Min
+             , data     = Data
+             }};
 push(FieldID, Val,
      OldTop = #top{ minimum  = OldMin
                   , data     = Data0
@@ -85,13 +86,13 @@ push(FieldID, Val,
       end,
       Data = gb_insert(Key, Val, Data2),
       {Min, _} = gb_trees:smallest(Data),
-      #top{ minimum  = Min
-          , size     = MaxSize
-          , max_size = MaxSize
-          , data     = Data
-          };
+      {true, #top{ minimum  = Min
+                 , size     = MaxSize
+                 , max_size = MaxSize
+                 , data     = Data
+                 }};
     true ->
-      OldTop
+      {false, OldTop}
   end.
 
 %%================================================================================
@@ -125,7 +126,10 @@ maybe_push_to_top_same_as_sort_prop() ->
              length(L) >= NItems,
              begin
                Reference = lists:nthtail(length(L) - NItems, lists:sort(L)),
-               Top = lists:foldl( fun(I, Acc) -> push(1, I, Acc) end
+               Top = lists:foldl( fun(I, Acc0) ->
+                                      {_, Acc} = push(1, I, Acc0),
+                                      Acc
+                                  end
                                 , empty(NItems)
                                 , L
                                 ),

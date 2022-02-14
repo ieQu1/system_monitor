@@ -222,8 +222,8 @@ update_acc( ?HIST(Pid, OldReds, OldMem)
                     , dmemory  = DMem
                     , mql      = MQL
                     },
-      Acc = maybe_push_to_top(Acc0, Delta),
-      diceroll(Acc#top_acc.sample_modulo) andalso
+      {IsChanged, Acc} = maybe_push_to_top(Acc0, Delta),
+      (diceroll(Acc#top_acc.sample_modulo) orelse IsChanged) andalso
         maybe_update_aggr_top(Delta),
       Acc#top_acc{ hist_data = [?HIST(Pid, Reds, Mem) | Histories]
                  };
@@ -317,21 +317,29 @@ empty_top(NProc, Dt) ->
           , mql            = Empty
           }.
 
--spec maybe_push_to_top(#top_acc{}, #delta{}) -> #top_acc{}.
-maybe_push_to_top(#top_acc{ is_vip             = IsVip
-                          , vips               = GVIPs
-                          , memory             = GMem
-                          , dreds              = GDReds
-                          , dmemory            = GDMem
-                          , mql                = GMQL
+-spec maybe_push_to_top(#top_acc{}, #delta{}) -> {IsChanged, #top_acc{}}
+          when IsChanged :: boolean().
+maybe_push_to_top(#top_acc{ is_vip  = IsVipP
+                          , vips    = GVIPs
+                          , memory  = GMem0
+                          , dreds   = GDReds0
+                          , dmemory = GDMem0
+                          , mql     = GMQL0
                           } = Acc,
                   Delta) ->
-  Acc#top_acc{ vips    = [Delta || maps:is_key(Delta#delta.reg_name, IsVip)] ++ GVIPs
-             , memory  = system_monitor_top:push(#delta.memory,  Delta, GMem)
-             , dmemory = system_monitor_top:push(#delta.dmemory, Delta, GDMem)
-             , dreds   = system_monitor_top:push(#delta.dreds,   Delta, GDReds)
-             , mql     = system_monitor_top:push(#delta.mql,     Delta, GMQL)
-             }.
+  IsVip = maps:is_key(Delta#delta.reg_name, IsVipP),
+  {IsMem,   GMem}   = system_monitor_top:push(#delta.memory,  Delta, GMem0),
+  {IsDReds, GDReds} = system_monitor_top:push(#delta.dreds,   Delta, GDReds0),
+  {IsMQL,   GMQL}   = system_monitor_top:push(#delta.mql,     Delta, GMQL0),
+  {_,       GDMem}  = system_monitor_top:push(#delta.dmemory, Delta, GDMem0),
+  IsChanged = IsVip orelse IsMem orelse IsDReds orelse IsMQL,
+  { IsChanged
+  , Acc#top_acc{ vips    = [Delta || IsVip] ++ GVIPs
+               , memory  = GMem
+               , dmemory = GDMem
+               , dreds   = GDReds
+               , mql     = GMQL
+               }}.
 
 -spec top_to_list(#top_acc{}) -> [#delta{}].
 top_to_list(#top_acc{ vips    = VIPs
