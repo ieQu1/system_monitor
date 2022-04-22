@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------------------
-%% Copyright 2022 k32
+%% Copyright 2022 ieQu1
 %% Copyright 2021 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -182,9 +182,18 @@ create_partition_tables(Conn, Day) ->
   To = to_postgres_date(Day + 1),
   lists:foreach(fun(Table) ->
                     Query = create_partition_query(Table, Day, From, To),
-                    [{ok, [], []}, {ok, [], []}] = epgsql:squery(Conn, Query)
+                    check_result(epgsql:squery(Conn, Query))
                 end,
                 Tables).
+
+check_result([]) ->
+  ok;
+check_result({error, {error, error, _, duplicate_table, _, _}}) ->
+  ok;
+check_result([{ok, [], []} | Rest]) ->
+  check_result(Rest);
+check_result(Err) ->
+  error({failed_to_create_partition, Err}).
 
 delete_partition_tables(Conn, Day) ->
   Tables = [<<"prc">>, <<"app_top">>, <<"fun_top">>, <<"node_status">>],
