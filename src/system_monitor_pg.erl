@@ -169,10 +169,12 @@ connect_options() ->
 mk_partitions(Conn) ->
   DaysAhead = application:get_env(system_monitor, partition_days_ahead, 10),
   DaysBehind = application:get_env(system_monitor, partition_days_behind, 10),
-  GDate = calendar:date_to_gregorian_days(date()),
+  %% date() uses local time while event data is in UTC
+  %% so we need to subtract 1 day to make sure there is partition for current UTC timestamps
+  GDate = calendar:date_to_gregorian_days(date()) - 1,
   DaysAheadL = lists:seq(GDate, GDate + DaysAhead),
   %% Delete 10 days older than partition_days_behind config
-  DaysBehindL = lists:seq(GDate - DaysBehind - 10, GDate - DaysBehind - 1),
+  DaysBehindL = lists:seq(GDate - DaysBehind - 10, GDate - DaysBehind - 2),
   lists:foreach(fun(Day) -> create_partition_tables(Conn, Day) end, DaysAheadL),
   lists:foreach(fun(Day) -> delete_partition_tables(Conn, Day) end, DaysBehindL).
 
