@@ -23,7 +23,6 @@
         , handle_call/3
         , handle_info/2
         , handle_cast/2
-        , format_status/2
         , terminate/2
 
         , connect_options/0
@@ -102,11 +101,6 @@ handle_cast({produce, Type, Events}, #{connection := Conn} = State) ->
       run_query(Conn, Type, Events)
   end,
   {noreply, State}.
-
-format_status(normal, [_PDict, State]) ->
-  [{data, [{"State", State}]}];
-format_status(terminate, [_PDict, State]) ->
-  State.
 
 terminate(_Reason, #{connection := undefined}) ->
   ok;
