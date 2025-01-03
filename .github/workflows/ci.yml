@@ -2,24 +2,34 @@ name: CI
 on: [push, pull_request]
 jobs:
   test:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        erlang:
+          - otp: "24"
+            rebar3: "3.20"
+          - otp: "25"
+            rebar3: "3.22"
+          - otp: "26"
+            rebar3: "3.22"
+          - otp: "27"
+            rebar3: "3.24"
+
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
 
       - name: Install Erlang/OTP
-        run: |
-          OTP_VERSION="24.1.7-1"
-          UBUNTU_RELEASE="focal"
-          DEB_NAME="esl-erlang_${OTP_VERSION}~ubuntu~${UBUNTU_RELEASE}_amd64.deb"
-          echo $DEB_NAME
-          curl -f https://packages.erlang-solutions.com/erlang/debian/pool/$DEB_NAME -o $DEB_NAME
-          sudo dpkg --install $DEB_NAME
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.erlang.otp }}
+          rebar3-version: ${{ matrix.erlang.rebar3 }}
+
       - name: Run tests
         run: make
 
       - name: Archive common test results
         if: ${{ always() }}
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: CT results
           path: _build/test/logs/**
