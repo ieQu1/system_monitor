@@ -1,15 +1,15 @@
 {"1.2.0",
-[{<<"epgsql">>,{pkg,<<"epgsql">>,<<"4.6.0">>},0},
+[{<<"epgsql">>,{pkg,<<"epgsql">>,<<"4.7.1">>},0},
  {<<"snabbkaffe">>,
   {git,"https://github.com/kafka4beam/snabbkaffe",
-       {ref,"bbabb87ff624821612879ed9961b661c7df04e4e"}},
+       {ref,"b59298334ed349556f63405d1353184c63c66534"}},
   0},
  {<<"supervisor3">>,{pkg,<<"supervisor3">>,<<"1.1.12">>},0}]}.
 [
 {pkg_hash,[
- {<<"epgsql">>, <<"A403534D03811C867E79405BB18D6061A5FCEF92ACF0236A9150AC93748CE143">>},
+ {<<"epgsql">>, <<"D4E47CAE46C18C8AFA88E34D59A9B4BAE16368D7CE1EB3DA24FA755EB28393EB">>},
  {<<"supervisor3">>, <<"2FAB1AF26BB9F8AE07692BB30EF79D5F1940E1587EFF9C14C6C8B04B16B400A8">>}]},
 {pkg_hash_ext,[
- {<<"epgsql">>, <<"6BE4910A02551F21EAB6F6F27D97B0D4B1DFFC617F1A64C8C95FDD45652FA9E1">>},
+ {<<"epgsql">>, <<"B6D86B7DC42C8555B1D4E20880E5099D6D6D053148000E188E548F98E4E01836">>},
  {<<"supervisor3">>, <<"62BF29F802C8620B7F9609FE5D81212B1AA5A75A7D86876B61CEA73BE58BA2A6">>}]}
 ].
