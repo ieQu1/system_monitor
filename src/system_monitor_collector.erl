@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------------------
-%% Copyright 2022 k32
+%% Copyright 2022-2025 k32
 %% Copyright 2020 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -40,18 +40,19 @@
 
 %% Type and record definitions
 
--define(HIST(PID, REDS, MEM), {PID, REDS, MEM}).
+-type time_ms() :: integer().
+
+-define(HIST(PID, TIME, REDS, MEM), {PID, TIME, REDS, MEM}).
 
 -record(state,
         { timer                :: timer:tref()
         , old_data        = [] :: [hist()]
-        , last_ts              :: system_monitor_lib:ts()
         , time_to_collect = 0  :: non_neg_integer()
+        , min_pid              :: pid() | undefined
         }).
 
 -record(delta,
         { pid      :: pid()
-        , reg_name :: atom()
         , reds     :: non_neg_integer()
         , dreds    :: non_neg_integer()
         , memory   :: non_neg_integer()
@@ -60,8 +61,22 @@
         }).
 
 -record(top_acc,
-        { is_vip        :: #{atom() => _}
-        , dt            :: non_neg_integer()
+        { is_vip        :: #{pid() => _}
+          %% If we're still collecting process infos past this time,
+          %% we're overloaded:
+        , overload_time :: time_ms()
+          %% min_pid..max_pid delimit sliding window of pids that have
+          %% been included in the run. `min_pid' is set at the
+          %% beginning of iteration, `max_pid' is set in the end, if
+          %% the run times out. This value will be used as `min_pid'
+          %% in the next run; this way we scan through all processes
+          %% even when the system is overloaded.
+          %%
+          %% This, of course, leads to various artifacts, processes
+          %% appearing and disappearing, but it's better than nothing
+          %% I guess.
+        , min_pid       :: pid() | undefined
+        , max_pid       :: pid() | undefined
         , hist_data     :: [hist()]
         , sample_modulo :: non_neg_integer()
         %% Tops
@@ -72,23 +87,24 @@
         , mql           :: system_monitor_top:top()
         }).
 
--type hist() :: ?HIST(pid(), non_neg_integer(), non_neg_integer()).
+-type hist() :: ?HIST(pid(), time_ms(), non_neg_integer(), non_neg_integer()).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
 %% @doc Add a VIP
--spec add_vip(atom() | [atom()]) -> ok.
-add_vip(RegName) when is_atom(RegName) ->
-  add_vip([RegName]);
-add_vip(RegNames) when is_list(RegNames) ->
-  gen_server:call(?SERVER, {add_vip, RegNames}).
+-spec add_vip(Obj | [Obj]) -> ok
+          when Obj :: atom() | pid().
+add_vip(VIP) when is_atom(VIP); is_pid(VIP) ->
+  add_vip([VIP]);
+add_vip(VIPs) when is_list(VIPs) ->
+  gen_server:call(?SERVER, {add_vip, VIPs}).
 
 %% @doc Add a VIP
--spec remove_vip(atom()) -> ok.
-remove_vip(RegName) ->
-  gen_server:call(?SERVER, {remove_vip, RegName}).
+-spec remove_vip(atom() | pid()) -> ok.
+remove_vip(VIP) ->
+  gen_server:call(?SERVER, {remove_vip, VIP}).
 
 -spec start_link() -> {ok, pid()} | ignore | {error, term()}.
 start_link() ->
@@ -99,17 +115,16 @@ start_link() ->
 %%%===================================================================
 
 init([]) ->
+  process_flag(priority, high),
   put(?COUNT, 0),
   {ok, TRef} = timer:send_after(sample_interval(), collect_data),
-  {ok, #state{ timer       = TRef
-             , last_ts     = system_monitor_lib:timestamp()
-             }}.
+  {ok, #state{ timer       = TRef}}.
 
-handle_call({add_vip, RegNames}, _From, State) ->
-  application:set_env(?APP, vips, lists:usort(RegNames ++ ?CFG(vips))),
+handle_call({add_vip, VIPs}, _From, State) ->
+  application:set_env(?APP, vips, lists:usort(VIPs ++ ?CFG(vips))),
   {reply, ok, State};
-handle_call({remove_vip, RegName}, _From, State) ->
-  application:set_env(?APP, vips, lists:delete(RegName, ?CFG(vips))),
+handle_call({remove_vip, VIP}, _From, State) ->
+  application:set_env(?APP, vips, lists:delete(VIP, ?CFG(vips))),
   {reply, ok, State};
 handle_call(_Msg, _From, State) ->
   {reply, {error, bad_call}, State}.
@@ -122,10 +137,11 @@ handle_info(collect_data, State0) ->
   T1 = system_monitor_lib:timestamp(),
   NumProcesses = erlang:system_info(process_count),
   TooManyPids = NumProcesses > ?CFG(top_max_procs),
-  Pids = case TooManyPids of
-           false -> lists:sort(processes());
-           true  -> lists:sort(get_vip_pids())
+  Pids0  = case TooManyPids of
+           false -> processes();
+           true  -> get_vip_pids()
          end,
+  Pids = lists:sort(Pids0),
   {ProcTop, State} = collect_proc_top(State0, T1, Pids, TooManyPids),
   {AppTop, InitCallTop, CurrFunTop} = finalize_aggr_top(T1, NumProcesses),
   %% Report the collected data:
@@ -133,6 +149,7 @@ handle_info(collect_data, State0) ->
   %% Prepare for the next iteration:
   T2 = system_monitor_lib:timestamp(),
   LastRunTime = erlang:convert_time_unit(T2 - T1, ?TS_UNIT, millisecond),
+  logger:debug("SM last run time ~p ms", [LastRunTime]),
   SleepTime = max(500, sample_interval() - LastRunTime),
   erlang:garbage_collect(self()),
   {ok, TRef} = timer:send_after(SleepTime, collect_data),
@@ -150,41 +167,65 @@ handle_info(_Info, State) ->
 %% Very important processes
 %%--------------------------------------------------------------------
 
--spec vip_names() -> [atom()].
-vip_names() ->
+-spec vips() -> [atom()].
+vips() ->
   ?CFG(vips).
 
 -spec get_vip_pids() -> [pid()].
 get_vip_pids() ->
   lists:foldl( fun(I, Acc) ->
-                   case whereis(I) of
+                   case is_pid(I) orelse whereis(I) of
+                     true      -> [I|Acc];
                      undefined -> Acc;
                      Pid       -> [Pid|Acc]
                    end
                end
              , []
-             , vip_names()
+             , vips()
              ).
 
--spec make_is_vip() -> #{atom() => []}.
+-spec make_is_vip() -> #{pid() => []}.
 make_is_vip() ->
-  maps:from_list([{I, []} || I <- vip_names()]).
+  Fun = fun(Name) when is_atom(Name) ->
+            case whereis(Name) of
+              undefined ->
+                false;
+              Pid ->
+                {true, Pid}
+            end;
+           (Pid) when is_pid(Pid) ->
+            case is_process_alive(Pid) of
+              true ->
+                {true, Pid};
+              false ->
+                application:set_env(?APP, vips, lists:delete(Pid, vips())),
+                false
+            end
+        end,
+  L = lists:filtermap(Fun, vips()),
+  maps:from_list([{I, []} || I <- L]).
 
 %%--------------------------------------------------------------------
 %% Proc top collection
 %%--------------------------------------------------------------------
 
 -spec collect_proc_top(#state{}, integer(), [pid()], boolean()) -> {[#erl_top{}], #state{}}.
-collect_proc_top(State = #state{old_data = OldData, last_ts = LastTs}, Now, Pids, TooManyPids) ->
-  Dt = max(1, Now - LastTs),
-  {Deltas, NewData} = top_deltas(OldData, Pids, Dt),
+collect_proc_top(State = #state{old_data = OldData, min_pid = MinPid}, Now, Pids, TooManyPids) ->
+  {Deltas, NewData, NewMinPid} = top_deltas(OldData, MinPid, Pids),
   ProcTop = [make_fake_proc(Now) || TooManyPids] ++ [enrich(I, Now) || I <- Deltas],
-  {ProcTop, State#state{old_data = NewData}}.
+  {ProcTop, State#state{old_data = NewData, min_pid = NewMinPid}}.
 
--spec top_deltas([hist()], [pid()], non_neg_integer()) -> {[#delta{}], [hist()]}.
-top_deltas(OldData, Pids, Dt) ->
-  Acc = go(OldData, Pids, empty_top(length(Pids), Dt)),
-  {top_to_list(Acc), Acc#top_acc.hist_data}.
+-spec top_deltas([hist()], MinPid, [pid()]) -> {[#delta{}], [hist()], MinPid}
+          when MinPid :: pid() | undefined.
+top_deltas(OldData, MinPid, Pids) ->
+  Acc = go(OldData, Pids, empty_top(MinPid, length(Pids))),
+  #top_acc{ hist_data = Histories
+          , max_pid = MaxPid
+          } = Acc,
+  { top_to_list(Acc)
+  , lists:reverse(Histories)
+  , MaxPid
+  }.
 
 -spec go([hist()], [pid()], #top_acc{}) -> #top_acc{}.
 go([], [], Acc) ->
@@ -192,30 +233,65 @@ go([], [], Acc) ->
 go(_Old, [], Acc) ->
   %% The rest of the processes have terminated, discard them:
   Acc;
-go([?HIST(OldPid, _, _)|OldL], PidL = [Pid|_], Acc) when Pid > OldPid ->
+go([?HIST(OldPid, _, _, _)|OldL], PidL = [Pid|_], Acc) when Pid > OldPid ->
   %% OldPid terminated, discard it:
   go(OldL, PidL, Acc);
-go([Old = ?HIST(Pid, _, _)|OldL], [Pid|PidL], Acc0) ->
+go([Old = ?HIST(Pid, _, _, _)|OldL], [Pid|PidL], Acc0) ->
   %% This is a process that we've seen before:
-  Acc = update_acc(Old, Acc0),
-  go(OldL, PidL, Acc);
+  #top_acc{ overload_time = OLT
+          , min_pid = MinPid
+          , is_vip = IsVipP
+          } = Acc0,
+  T = erlang:monotonic_time(millisecond),
+  %% Overload protection logic:
+  IsVip = maps:is_key(Pid, IsVipP),
+  EnterOverload = if T >= OLT -> true;
+                    true      -> false
+                  end,
+  %% Should we collect data for this process?
+  Collectable = if IsVip                                   -> true;
+                   is_pid(MinPid), Pid > MinPid            -> true;
+                   MinPid =:= undefined, not EnterOverload -> true;
+                   true                                    -> false
+                end,
+  if Collectable ->
+      %% Collect data for this process:
+      Acc = update_acc(Pid, T, Old, Acc0),
+      go(OldL, PidL, Acc);
+     EnterOverload ->
+      %% Ignore the process, but keep its history:
+      Acc = push_stale(Old, Acc0#top_acc{max_pid = Pid}),
+      go(OldL, PidL, Acc);
+     true ->
+      %% Ignore the process, but keep its history:
+      Acc = push_stale(Old, Acc0),
+      go(OldL, PidL, Acc)
+  end;
 go(OldL, [Pid|PidL], Acc0) ->
   %% This is a new process:
-  Acc = update_acc(?HIST(Pid, 0, 0), Acc0),
+  T = erlang:monotonic_time(millisecond),
+  Acc = update_acc(Pid, T, undefined, Acc0),
   go(OldL, PidL, Acc).
 
--spec update_acc(hist(), #top_acc{}) -> #top_acc{}.
-update_acc( ?HIST(Pid, OldReds, OldMem)
-          , #top_acc{ dt        = Dt
-                    , hist_data = Histories
-                    } = Acc0
+-spec update_acc(pid(), integer(), hist() | undefined, #top_acc{}) -> #top_acc{}.
+update_acc( Pid
+          , Now
+          , History
+          , #top_acc{hist_data = Histories} = Acc0
           ) ->
   case get_pid_info(Pid) of
-    {RegName, Reds, Mem, MQL} ->
-      DReds = (Reds - OldReds) div Dt,
-      DMem = (Mem  - OldMem) div Dt,
-      Delta = #delta{ reg_name = RegName
-                    , pid      = Pid
+    {Reds, Mem, MQL} ->
+      case History of
+        ?HIST(_Pid, OldTime, OldReds, OldMem) ->
+          %% Note: in seconds
+          Dt = (Now - OldTime) / 1000,
+          DReds = (Reds - OldReds) / Dt,
+          DMem = (Mem - OldMem) / Dt;
+        undefined ->
+          DReds = Reds,
+          DMem = Mem
+      end,
+      Delta = #delta{ pid      = Pid
                     , reds     = Reds
                     , dreds    = DReds
                     , memory   = Mem
@@ -225,11 +301,14 @@ update_acc( ?HIST(Pid, OldReds, OldMem)
       {IsChanged, Acc} = maybe_push_to_top(Acc0, Delta),
       (diceroll(Acc#top_acc.sample_modulo) orelse IsChanged) andalso
         maybe_update_aggr_top(Delta),
-      Acc#top_acc{ hist_data = [?HIST(Pid, Reds, Mem) | Histories]
+      Acc#top_acc{ hist_data = [?HIST(Pid, Now, Reds, Mem) | Histories]
                  };
     undefined ->
       Acc0
   end.
+
+push_stale(Old = ?HIST(_, _, _, _), Acc = #top_acc{hist_data = Histories}) ->
+  Acc#top_acc{hist_data = [Old | Histories]}.
 
 %%--------------------------------------------------------------------
 %% Sample top stuff
@@ -251,7 +330,7 @@ maybe_update_aggr_top(#delta{ pid    = Pid
             end,
       ets:update_counter(?TOP_CURR_FUN, CurrentFunction, {2, 1}, {CurrentFunction, 0}),
       ets:update_counter(?TOP_INIT_CALL, InitialCall, {2, 1}, {InitialCall, 0}),
-      ets:update_counter(?TOP_APP_TAB, App, [{2, 1}, {3, DReds}, {4, Memory}], {App, 0, 0, 0}),
+      ets:update_counter(?TOP_APP_TAB, App, [{2, 1}, {3, ceil(DReds)}, {4, Memory}], {App, 0, 0, 0}),
       ok
   end.
 
@@ -302,12 +381,14 @@ filter_nproc_results(Tab, NProc, SampleSize) ->
 %% Top accumulator manipulation
 %%--------------------------------------------------------------------
 
--spec empty_top(non_neg_integer(), non_neg_integer()) -> #top_acc{}.
-empty_top(NProc, Dt) ->
+-spec empty_top(pid() | undefined, non_neg_integer()) -> #top_acc{}.
+empty_top(MinPid, NProc) ->
   Empty = system_monitor_top:empty(?CFG(top_num_items)),
   SampleModulo = max(1, NProc div top_sample_size()),
+  OLT = erlang:monotonic_time(millisecond) + ?CFG(top_time_to_overload),
   #top_acc{ is_vip         = make_is_vip()
-          , dt             = Dt
+          , overload_time  = OLT
+          , min_pid        = MinPid
           , hist_data      = []
           , sample_modulo  = SampleModulo
           , vips           = []
@@ -327,7 +408,7 @@ maybe_push_to_top(#top_acc{ is_vip  = IsVipP
                           , mql     = GMQL0
                           } = Acc,
                   Delta) ->
-  IsVip = maps:is_key(Delta#delta.reg_name, IsVipP),
+  IsVip = maps:is_key(Delta#delta.pid, IsVipP),
   {IsMem,   GMem}   = system_monitor_top:push(#delta.memory,  Delta, GMem0),
   {IsDReds, GDReds} = system_monitor_top:push(#delta.dreds,   Delta, GDReds0),
   {IsMQL,   GMQL}   = system_monitor_top:push(#delta.mql,     Delta, GMQL0),
@@ -358,7 +439,6 @@ top_to_list(#top_acc{ vips    = VIPs
 
 -spec enrich(#delta{}, system_monitor_lib:ts()) -> #erl_top{}.
 enrich(#delta{ pid      = Pid
-             , reg_name = RegName
              , reds     = Reds
              , dreds    = DReds
              , memory   = Memory
@@ -367,11 +447,13 @@ enrich(#delta{ pid      = Pid
              }, Now) ->
   Info = process_info(Pid, [group_leader, initial_call, dictionary, stack_size,
                             heap_size, total_heap_size, current_function,
-                            current_stacktrace]),
+                            current_stacktrace, registered_name]),
   case Info of
     [{group_leader, GL}, {initial_call, _}, {dictionary, _},
      {stack_size, StackSize}, {heap_size, HeapSize}, {total_heap_size, Total},
-     {current_function, CurrentFunction}, {current_stacktrace, CurrentStack}] ->
+     {current_function, CurrentFunction}, {current_stacktrace, CurrentStack},
+     {registered_name, RegName}
+    ] ->
       InitialCall = initial_call(Info);
     undefined ->
       GL = "<?.?.?>",
@@ -380,7 +462,8 @@ enrich(#delta{ pid      = Pid
       HeapSize = 0,
       Total = 0,
       CurrentStack = [],
-      CurrentFunction = undefined
+      CurrentFunction = undefined,
+      RegName = undefined
   end,
   #erl_top{ ts                 = Now
           , pid                = pid_to_list(Pid)
@@ -399,19 +482,17 @@ enrich(#delta{ pid      = Pid
           , current_function   = CurrentFunction
           }.
 
--spec get_pid_info(pid()) -> {RegName, Reds, Mem, MQL} | undefined
-          when RegName :: atom(),
-               Reds    :: non_neg_integer(),
+-spec get_pid_info(pid()) -> {Reds, Mem, MQL} | undefined
+          when Reds    :: non_neg_integer(),
                Mem     :: non_neg_integer(),
                MQL     :: non_neg_integer().
 get_pid_info(Pid) ->
-  case erlang:process_info(Pid, [registered_name, reductions, memory, message_queue_len]) of
-    [ {registered_name,   RegName}
-    , {reductions,        Reds}
+  case erlang:process_info(Pid, [reductions, memory, message_queue_len]) of
+    [ {reductions,        Reds}
     , {memory,            Mem}
     , {message_queue_len, MQL}
     ] ->
-      {RegName, Reds, Mem, MQL};
+      {Reds, Mem, MQL};
     undefined ->
       undefined
   end.

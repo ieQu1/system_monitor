@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------------------
-%% Copyright 2022 ieQu1
+%% Copyright 2022, 2025 ieQu1
 %% Copyright 2021 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -55,6 +55,7 @@ start_link() ->
 
 init(_Args) ->
   erlang:process_flag(trap_exit, true),
+  erlang:process_flag(priority, high),
   logger:update_process_metadata(#{domain => [system_monitor, pg]}),
   {ok, #{}, {continue, start_pg}}.
 

@@ -1,6 +1,6 @@
 %% -*- mode: erlang -*-
 %%--------------------------------------------------------------------------------
-%% Copyright 2022 k32
+%% Copyright 2022, 2025 k32
 %% Copyright 2020 Klarna Bank AB
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
@@ -48,6 +48,11 @@
         , memory           => 0.01 % 1 percent of total memory
         , num_processes    => 100  % absolute number of processes
         }}
+      %% Enter overload mode if data collection takes longer than this
+      %% value (in milliseconds). When in overload mode,
+      %% system_monitor will scan processes in groups. This may lead
+      %% to processes appearing and disappering from the top.
+    , {top_time_to_overload, 1000}
 
       %% List of registered processes that should be always reported:
     , {vips, [mnesia_tm, mnesia_locker]}

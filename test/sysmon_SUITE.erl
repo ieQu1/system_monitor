@@ -1,5 +1,5 @@
 %%--------------------------------------------------------------------
-%% Copyright 2022 k32
+%% Copyright 2022, 2025 k32
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -282,7 +282,7 @@ docker_startup() ->
  -e SYSMON_PASS=system_monitor_password \\
  -e GRAFANA_PASS=system_monitor_password \\
  -e POSTGRES_PASSWORD=system_monitor_password \\
- ghcr.io/k32/sysmon-postgres:1.0.0").
+ ghcr.io/iequ1/sysmon-postgres:1.5.4").
 
 docker_cleanup() ->
   exec("docker kill sysmondb"),
